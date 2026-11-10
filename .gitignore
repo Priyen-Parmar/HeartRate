@@ -1,0 +1,29 @@
+# Large datasets & archives
+Dataset/
+Dataset2/
+Dataset23.zip
+*.zip
+preprocessed_vidformer/
+preprocessed_vidformer1/
+preprocessed_vidformer2/
+preprocessed_vidformer*/
+
+# Model checkpoints & weights
+*.pt
+
+# Dependencies & caches
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Local database files & logs
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
