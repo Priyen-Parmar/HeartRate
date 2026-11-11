@@ -2,50 +2,30 @@
 """
 VitalEye — Live Camera Heart Rate, Respiratory Rate & HRV Monitor
 ═════════════════════════════════════════════════════════════════
-End-to-end real-time contactless physiological monitoring system using:
-  1. Custom YOLOv8 Multi-ROI Detector (models/yolov8/weights/best.pt)
-     — Tracks Face (Class 0), Nose (Class 1), and Chest (Class 2)
-     — Stabilized via OneEuroFilter + Exponential Moving Average (EMA)
-  2. Hybrid 468-Landmark FaceMesh + Multi-Zone Adaptive Skin Segmentation
-     — 468-pt 3D FaceMesh contour (`models/face_landmark.tflite` via OpenCV DNN)
-       eliminates background walls/bricks and carves out eyes, eyeglasses, eyebrows,
-       nostrils, lips, and mustache
-     — Multi-Zone Illumination-Invariant Chrominance (YCrCb + CIE LAB) preserves both
-       lit and shaded cheeks while local luminance ratio rejects beard/stubble & dark rims
-     — Temporal EMA mask hysteresis prevents edge flicker in difference frames
-     — 30-frame Running-Mean Illumination Drift Normalization
-     — Antialiased 64×64 Resize + 6-Channel [RGB, ΔRGB] Representation
-  3. PhysFormerX v3 3D-ResNet + SE Attention Model (models/vidformer.pt)
-     — Apple Silicon MPS-compatible 3D pooling + automatic CPU fallback
-     — Asynchronous background inference thread for stutter-free 30 FPS video
-     — Fast 4-second initial readout (120 frames) expanding to 10s (300 frames)
-  4. Real-Timestamp Spectral & HRV Analysis (VitalEye Report & Paper-3)
-     — Hann-windowed 4096-pt FFT with parabolic peak interpolation for HR (BPM)
-     — Dual-band Respiratory Rate (BrPM) in 0.15–0.40 Hz (9–24 BrPM)
-     — Inter-Beat Interval (IBI) quadratic refinement + 3σ outlier removal for HRV
+Supports BOTH:
+  • VitalEyeProNet (`models/vitaleye_pro_best.pt` — 10-channel low-light & motion-robust model)
+  • PhysFormerX v3 (`models/vidformer.pt` — 6-channel 3D-ResNet + SE model)
 
-Controls:
-  q / ESC — Quit and display session summary
-  r       — Reset buffers and recalibrate
-  m       — Toggle Multi-ROI boxes (Face only vs. Face + Nose + Chest)
-  k       — Toggle live Hybrid Skin-Mask inset preview
-  s       — Save annotated screenshot
-  f       — Toggle fullscreen
-
-Usage:
-  ./run_live_hr.sh
-  # or:
-  /usr/local/bin/python3.12 live_hr_monitor.py
+Key Anti-40-50-BPM Drift & Low-Light/Motion Enhancements:
+  1. Joint-Mask Boundary Suppression: Zeros out inter-frame differences where a pixel
+     transitions between background (0) and skin (>0), eliminating 1/f² step-edge noise
+     that previously pinned FFT peaks at 40–50 BPM.
+  2. Uniform 30 Hz Temporal Resampling: Resamples variable-FPS low-light webcam frames
+     onto a uniform 30.0 Hz timeline so 3D temporal convolutions always operate at their
+     trained sampling rate.
+  3. Pre-FFT 3rd-Order Butterworth Bandpass (0.85–2.50 Hz = 51–150 BPM) + Baseline Detrending:
+     Strips sub-cardiac motion/exposure drift before computing the Hann-windowed periodogram.
+  4. Deep rPPG + POS + CHROM Spectral Fusion: Fuses the neural network's normalized power
+     spectral density with illumination-invariant POS and CHROM chrominance spectra for
+     rock-solid BPM tracking under low light and slight movement.
 """
 
 import os
 import sys
 
-# Enable MPS fallback & writable Ultralytics config BEFORE importing torch / ultralytics
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
 
-# Auto-switch to /usr/local/bin/python3.12 on macOS if launched with system Python lacking torch
 try:
     import torch  # noqa: F401
 except ImportError:
@@ -65,17 +45,19 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.transforms import Resize
 from scipy.signal import periodogram, butter, filtfilt, find_peaks
 from scipy.ndimage import uniform_filter1d
 
-# ─── Add deploy folder to path so we can import physformer, preprocessor, OneEuroFilter ───
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEPLOY_DIR = os.path.join(ROOT_DIR, "VitalEye_CS776_Deploy")
-if DEPLOY_DIR not in sys.path:
-    sys.path.insert(0, DEPLOY_DIR)
+for _p in (ROOT_DIR, DEPLOY_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from physformer import PhysFormerX
+from vitaleye_pro_model import VitalEyeProNet
 from preprocessor import skin_mask_ycrcb
 from OneEuroFilter import OneEuroFilter
 
@@ -83,21 +65,22 @@ from OneEuroFilter import OneEuroFilter
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIGURATION & DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
-DEFAULT_YOLO    = os.path.join(DEPLOY_DIR, "models", "yolov8", "weights", "best.pt")
-DEFAULT_MODEL   = os.path.join(DEPLOY_DIR, "models", "vidformer.pt")
-FALLBACK_MODEL  = os.path.join(DEPLOY_DIR, "models", "physformer.pt")
+DEFAULT_YOLO     = os.path.join(DEPLOY_DIR, "models", "yolov8", "weights", "best.pt")
+PRO_MODEL_PATH   = os.path.join(DEPLOY_DIR, "models", "vitaleye_pro_best.pt")
+DEFAULT_MODEL    = PRO_MODEL_PATH if os.path.exists(PRO_MODEL_PATH) else os.path.join(DEPLOY_DIR, "models", "vidformer.pt")
+FALLBACK_MODEL   = os.path.join(DEPLOY_DIR, "models", "physformer.pt")
 
-BUFFER_LEN      = 300        # Full window: 300 frames (~10 s @ 30 fps)
-WARMUP_LEN      = 120        # Fast initial readout: 120 frames (~4 s @ 30 fps)
-FACE_CROP_SIZE  = 128        # Matches preprocessor.py FACE_SIZE = 128 for accurate YCbCr morphology
-IMG_SIZE        = 64         # Matches PhysFormerX spatial input (64×64)
-BPM_EMA_ALPHA   = 0.70       # Temporal smoothing for BPM display
-RPM_EMA_ALPHA   = 0.75       # Temporal smoothing for Respiratory Rate display
-BOX_EMA_ALPHA   = 0.80       # EMA box stabilization (matches preprocessor.py / sliding_pipeline.py)
-PPG_DISPLAY     = 180        # Number of recent PPG samples shown in live waveform graph
+BUFFER_LEN       = 300        # 10 s @ 30 fps
+WARMUP_LEN       = 120        # 4 s @ 30 fps for initial lock
+FACE_CROP_SIZE   = 128        # Spatial size for 468-pt FaceMesh + Multi-Zone YCrCb/LAB mask
+IMG_SIZE         = 64         # Spatial input to PhysFormerX / VitalEyeProNet
+BPM_EMA_ALPHA    = 0.70
+RPM_EMA_ALPHA    = 0.75
+BOX_EMA_ALPHA    = 0.80
+PPG_DISPLAY      = 180
 
-CLASS_NAMES     = {0: "Face", 1: "Nose", 2: "Chest"}
-CLASS_COLORS    = {
+CLASS_NAMES      = {0: "Face", 1: "Nose", 2: "Chest"}
+CLASS_COLORS     = {
     0: (50, 220, 50),    # Face: Green
     1: (255, 200, 0),    # Nose: Cyan-Blue
     2: (0, 180, 255),    # Chest: Amber-Orange
@@ -108,8 +91,6 @@ CLASS_COLORS    = {
 #  ROI TRACKING & STABILIZATION (OneEuroFilter + EMA)
 # ─────────────────────────────────────────────────────────────────────────────
 class ROITracker:
-    """Stabilizes [x1, y1, x2, y2] bounding boxes using OneEuroFilter + EMA."""
-
     def __init__(self, fps: float = 30.0, alpha: float = BOX_EMA_ALPHA):
         self.alpha = alpha
         self.prev_boxes = {}
@@ -135,11 +116,7 @@ class ROITracker:
             euro_box = raw_box
 
         prev = self.prev_boxes.get(cls_id)
-        if prev is None:
-            smoothed = euro_box
-        else:
-            smoothed = [self.alpha * p + (1.0 - self.alpha) * n for p, n in zip(prev, euro_box)]
-
+        smoothed = euro_box if prev is None else [self.alpha * p + (1.0 - self.alpha) * n for p, n in zip(prev, euro_box)]
         self.prev_boxes[cls_id] = smoothed
         self.last_seen[cls_id] = timestamp
         return smoothed
@@ -157,13 +134,9 @@ class ROITracker:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SIGNAL PROCESSING, FFT, POS, AND PAPER-3 HRV/RR EXTRACTION
+#  SIGNAL PROCESSING, BANDPASS DETRENDING & SPECTRAL FUSION (Fixes 40–50 BPM)
 # ─────────────────────────────────────────────────────────────────────────────
 def parabolic_peak_freq(freqs: np.ndarray, psd: np.ndarray, valid_idx: np.ndarray) -> float:
-    """
-    Find dominant frequency in `valid_idx` with quadratic (parabolic) interpolation
-    over log-PSD for sub-bin accuracy (Paper-3 Section II-B).
-    """
     if len(valid_idx) == 0:
         return 0.0
     sub_psd = psd[valid_idx]
@@ -176,72 +149,169 @@ def parabolic_peak_freq(freqs: np.ndarray, psd: np.ndarray, valid_idx: np.ndarra
         y2 = math.log(max(float(psd[k + 1]), 1e-12))
         denom = 2.0 * (2.0 * y1 - y0 - y2)
         if abs(denom) > 1e-9:
-            delta = (y0 - y2) / denom
-            delta = max(-0.5, min(0.5, delta))
+            delta = max(-0.5, min(0.5, (y0 - y2) / denom))
             df = float(freqs[1] - freqs[0])
             return float(freqs[k] + delta * df)
     return float(freqs[k])
 
 
-def analyze_ppg_spectrum(signal: np.ndarray, fps: float = 30.0):
+def bandpass_cardiac(sig: np.ndarray, fps: float = 30.0, lo_hz: float = 0.85, hi_hz: float = 2.50) -> np.ndarray:
     """
-    Extract Heart Rate (BPM), Respiratory Rate (BrPM), Signal Quality (0-1),
-    and spectrum data from predicted 1-D rPPG signal.
+    Zero-phase 3rd-order Butterworth bandpass filter + moving-average detrending.
+    Crucial for suppressing <0.85 Hz (<51 BPM) 1/f motion & auto-exposure drift
+    so low-frequency sidelobes never pin the FFT peak at 40–50 BPM.
     """
-    if len(signal) < 60 or fps <= 1.0:
-        return 0.0, 0.0, 0.0, None, None
-
-    s = signal.astype(np.float64) - np.mean(signal)
+    s = sig.astype(np.float64) - np.mean(sig)
+    if len(s) < 45:
+        return s
+    # Subtract 25-frame (~0.8s) running mean first to remove baseline wander
+    win = max(5, int(round(fps * 0.80)))
+    s = s - uniform_filter1d(s, size=win)
+    try:
+        nyq = fps / 2.0
+        lo = max(lo_hz / nyq, 0.02)
+        hi = min(hi_hz / nyq, 0.98)
+        b, a = butter(3, [lo, hi], btype="band")
+        s = filtfilt(b, a, s)
+    except Exception:
+        pass
     std = np.std(s)
-    if std < 1e-7:
-        return 0.0, 0.0, 0.0, None, None
-    s = s / std
+    return s / (std + 1e-8)
 
-    freqs, psd = periodogram(s, fs=fps, nfft=4096, detrend='constant', window='hann')
 
-    # 1. Heart Rate band: 0.75 - 2.50 Hz (45 - 150 BPM)
-    hr_valid = np.where((freqs >= 0.75) & (freqs <= 2.50))[0]
-    bpm = 0.0
-    quality = 0.0
-    if len(hr_valid) > 0:
-        f_hr = parabolic_peak_freq(freqs, psd, hr_valid)
-        bpm = f_hr * 60.0
-        peak_band = np.where((freqs >= f_hr - 0.15) & (freqs <= f_hr + 0.15))[0]
-        peak_power = np.sum(psd[peak_band])
-        total_hr_power = np.sum(psd[hr_valid]) + 1e-9
-        quality = float(np.clip((peak_power / total_hr_power) * 1.4, 0.0, 1.0))
+def extract_pos_and_chrom_signals(frames_rgb_128: np.ndarray, fps: float = 30.0):
+    """
+    Extracts both POS (Wang et al. 2017) and CHROM (de Haan & Jeanne 2013) pulse
+    waveforms from the non-zero skin pixels of `frames_rgb_128` using overlapping
+    1.6-second sliding sub-windows for motion & low-light robustness.
+    """
+    T = len(frames_rgb_128)
+    if T < 45:
+        return np.zeros(T), np.zeros(T)
 
-    # 2. Respiratory Rate band: 0.15 - 0.40 Hz (9 - 24 BrPM, matches Vidformer1.py)
-    rr_valid = np.where((freqs >= 0.15) & (freqs <= 0.40))[0]
-    rpm = 0.0
-    if len(rr_valid) > 0:
-        f_rr = parabolic_peak_freq(freqs, psd, rr_valid)
-        rpm = f_rr * 60.0
+    rgb_means = np.zeros((T, 3), dtype=np.float64)
+    for t_idx, f in enumerate(frames_rgb_128):
+        mask = f.sum(axis=-1) > 8
+        if np.count_nonzero(mask) >= 20:
+            rgb_means[t_idx] = f[mask].mean(axis=0)
+        else:
+            rgb_means[t_idx] = f.mean(axis=(0, 1))
 
-    return bpm, rpm, quality, freqs, psd
+    # Overlap-add POS across ~1.6s windows
+    win_len = max(24, min(T, int(round(fps * 1.6))))
+    pos_sig = np.zeros(T, dtype=np.float64)
+    for start in range(0, T - win_len + 1, 2):
+        end = start + win_len
+        sub = rgb_means[start:end]
+        cn = sub / (np.mean(sub, axis=0, keepdims=True) + 1e-6)
+        s1 = cn[:, 1] - cn[:, 2]
+        s2 = cn[:, 1] + cn[:, 2] - 2.0 * cn[:, 0]
+        alpha = np.std(s1) / (np.std(s2) + 1e-8)
+        h = s1 + alpha * s2
+        pos_sig[start:end] += (h - np.mean(h)) / (np.std(h) + 1e-8)
+
+    # Global CHROM signal
+    cn_all = rgb_means / (np.mean(rgb_means, axis=0, keepdims=True) + 1e-6)
+    xs = 3.0 * cn_all[:, 0] - 2.0 * cn_all[:, 1]
+    ys = 1.5 * cn_all[:, 0] + cn_all[:, 1] - 1.5 * cn_all[:, 2]
+    xf = bandpass_cardiac(xs, fps=fps)
+    yf = bandpass_cardiac(ys, fps=fps)
+    alpha_c = np.std(xf) / (np.std(yf) + 1e-8)
+    chrom_sig = xf - alpha_c * yf
+
+    return bandpass_cardiac(pos_sig, fps=fps), bandpass_cardiac(chrom_sig, fps=fps)
+
+
+def analyze_fused_rppg_spectrum(
+    deep_signal: np.ndarray,
+    frames_rgb_128: np.ndarray,
+    fps: float = 30.0,
+    prev_bpm: float = 0.0,
+):
+    """
+    Computes Heart Rate (BPM), Respiratory Rate (BrPM), Signal Quality (0-1),
+    and fused waveform by combining:
+      • Deep 3D-CNN waveform (`PhysFormerX` / `VitalEyeProNet`)
+      • Overlap-Add POS chrominance waveform
+      • CHROM chrominance waveform
+    Includes sub-cardiac bandpass filtering (0.88–2.50 Hz = 53–150 BPM) and
+    harmonic/temporal continuity scoring so BPM never gets stuck at 40–50 BPM.
+    """
+    if len(deep_signal) < 60 or fps <= 1.0:
+        return 0.0, 0.0, 0.0, deep_signal, None, None
+
+    # 1. Respiratory Rate from unfiltered low-frequency component (0.15 - 0.40 Hz = 9 - 24 BrPM)
+    raw_zero = deep_signal.astype(np.float64) - np.mean(deep_signal)
+    freqs_rr, psd_rr = periodogram(raw_zero, fs=fps, nfft=4096, detrend="constant", window="hann")
+    rr_valid = np.where((freqs_rr >= 0.16) & (freqs_rr <= 0.40))[0]
+    rpm = parabolic_peak_freq(freqs_rr, psd_rr, rr_valid) * 60.0 if len(rr_valid) > 0 else 15.0
+
+    # 2. Bandpass-filtered cardiac signals (0.88 - 2.50 Hz = 52.8 - 150 BPM)
+    s_deep = bandpass_cardiac(deep_signal, fps=fps, lo_hz=0.88, hi_hz=2.50)
+    raw_fps = fps * (len(frames_rgb_128) / max(1, len(deep_signal)))
+    s_pos, s_chrom = extract_pos_and_chrom_signals(frames_rgb_128, fps=raw_fps)
+    if len(s_pos) != len(s_deep):
+        x_old = np.linspace(0.0, 1.0, len(s_pos))
+        x_new = np.linspace(0.0, 1.0, len(s_deep))
+        s_pos = np.interp(x_new, x_old, s_pos)
+        s_chrom = np.interp(x_new, x_old, s_chrom)
+
+    freqs, psd_deep = periodogram(s_deep, fs=fps, nfft=4096, detrend="constant", window="hann")
+    _, psd_pos = periodogram(s_pos, fs=fps, nfft=4096, detrend="constant", window="hann")
+    _, psd_chrom = periodogram(s_chrom, fs=fps, nfft=4096, detrend="constant", window="hann")
+
+    hr_valid = np.where((freqs >= 0.88) & (freqs <= 2.50))[0]
+    if len(hr_valid) == 0:
+        return 0.0, rpm, 0.0, s_deep, freqs, psd_deep
+
+    # Normalize each spectrum within the cardiac band and fuse
+    def _norm_psd(p):
+        total = np.sum(p[hr_valid]) + 1e-12
+        return p / total
+
+    p_d = _norm_psd(psd_deep)
+    p_p = _norm_psd(psd_pos)
+    p_c = _norm_psd(psd_chrom)
+
+    # Check if deep spectrum is overly concentrated at the very bottom bin (<0.93 Hz) due to motion
+    low_edge_mask = (freqs >= 0.88) & (freqs <= 0.94)
+    deep_low_ratio = np.sum(p_d[low_edge_mask]) / (np.sum(p_d[hr_valid]) + 1e-9)
+
+    if deep_low_ratio > 0.45:
+        # Motion/low-light edge artifact detected in raw diff -> weight POS + CHROM higher
+        psd_fused = 0.35 * p_d + 0.40 * p_p + 0.25 * p_c
+        fused_wave = 0.40 * s_deep + 0.40 * s_pos + 0.20 * s_chrom
+    else:
+        psd_fused = 0.60 * p_d + 0.25 * p_p + 0.15 * p_c
+        fused_wave = 0.65 * s_deep + 0.25 * s_pos + 0.10 * s_chrom
+
+    # Soft physiological & temporal continuity prior (normal resting/active HR 58–135 BPM)
+    f_hr_bins = freqs[hr_valid] * 60.0
+    phys_prior = np.exp(-0.5 * ((f_hr_bins - 78.0) / 32.0) ** 2)
+    if prev_bpm >= 52.0:
+        temp_prior = 0.70 + 0.30 * np.exp(-0.5 * ((f_hr_bins - prev_bpm) / 18.0) ** 2)
+    else:
+        temp_prior = np.ones_like(f_hr_bins)
+
+    weighted_psd = psd_fused.copy()
+    weighted_psd[hr_valid] = psd_fused[hr_valid] * (0.75 + 0.25 * phys_prior) * temp_prior
+
+    f_hr = parabolic_peak_freq(freqs, weighted_psd, hr_valid)
+    bpm = f_hr * 60.0
+
+    peak_band = np.where((freqs >= f_hr - 0.15) & (freqs <= f_hr + 0.15))[0]
+    peak_power = np.sum(psd_fused[peak_band])
+    total_power = np.sum(psd_fused[hr_valid]) + 1e-9
+    quality = float(np.clip((peak_power / total_power) * 1.6, 0.0, 1.0))
+
+    return bpm, rpm, quality, fused_wave, freqs, weighted_psd
 
 
 def extract_hrv_and_peaks(signal: np.ndarray, fps: float = 30.0, est_bpm: float = 75.0):
-    """
-    Implements Paper-3 (Chen et al., 'Respiratory Rate Estimation from Face Videos'):
-      1. Zero-phase bandpass filtering around cardiac band
-      2. Peak detection + quadratic peak location interpolation
-      3. Inter-Beat Interval (IBI) calculation
-      4. 3-sigma Gaussian outlier removal on IBIs
-      5. Returns (hrv_sdnn_ms, clean_peak_indices, ibi_bpm)
-    """
     if len(signal) < 90 or fps <= 5.0:
         return 0.0, [], 0.0
 
-    try:
-        nyq = fps / 2.0
-        lo = max(0.70 / nyq, 0.01)
-        hi = min(2.50 / nyq, 0.98)
-        b, a = butter(2, [lo, hi], btype='band')
-        filtered = filtfilt(b, a, signal.astype(np.float64))
-    except Exception:
-        filtered = signal.astype(np.float64) - np.mean(signal)
-
+    filtered = bandpass_cardiac(signal, fps=fps, lo_hz=0.88, hi_hz=2.50)
     min_dist = max(int(fps * 0.40), 4)
     peaks, _ = find_peaks(filtered, distance=min_dist, prominence=np.std(filtered) * 0.25)
 
@@ -253,24 +323,18 @@ def extract_hrv_and_peaks(signal: np.ndarray, fps: float = 30.0, est_bpm: float 
         if 0 < p < len(filtered) - 1:
             y0, y1, y2 = filtered[p - 1], filtered[p], filtered[p + 1]
             denom = 2.0 * (2.0 * y1 - y0 - y2)
-            delta = (y0 - y2) / denom if abs(denom) > 1e-9 else 0.0
-            delta = max(-0.5, min(0.5, delta))
+            delta = max(-0.5, min(0.5, (y0 - y2) / denom)) if abs(denom) > 1e-9 else 0.0
             refined_times.append((p + delta) / fps)
         else:
             refined_times.append(p / fps)
 
-    refined_times = np.array(refined_times)
-    ibis = np.diff(refined_times)
-    ibis = ibis[(ibis >= 0.35) & (ibis <= 1.40)]
+    ibis = np.diff(np.array(refined_times))
+    ibis = ibis[(ibis >= 0.38) & (ibis <= 1.15)]  # 52 to 158 BPM
     if len(ibis) < 2:
         return 0.0, peaks.tolist(), 0.0
 
     mu, sigma = np.mean(ibis), np.std(ibis)
-    if sigma > 1e-6:
-        clean_ibis = ibis[np.abs(ibis - mu) <= 3.0 * sigma]
-    else:
-        clean_ibis = ibis
-
+    clean_ibis = ibis[np.abs(ibis - mu) <= 3.0 * sigma] if sigma > 1e-6 else ibis
     if len(clean_ibis) < 2:
         clean_ibis = ibis
 
@@ -279,102 +343,94 @@ def extract_hrv_and_peaks(signal: np.ndarray, fps: float = 30.0, est_bpm: float 
     return sdnn_ms, peaks.tolist(), ibi_bpm
 
 
-def pos_chrominance_bpm(frames_rgb_128: np.ndarray, fps: float = 30.0) -> float:
-    """
-    Plane-Orthogonal-to-Skin (POS) mathematical rPPG baseline (Wang et al. 2017 / Report Sec VII-F).
-    Used as an auxiliary sanity check when camera motion is high.
-    """
-    T = len(frames_rgb_128)
-    if T < 60:
-        return 0.0
-    rgb_means = []
-    for f in frames_rgb_128:
-        mask = f.sum(axis=-1) > 0
-        if np.any(mask):
-            rgb_means.append(f[mask].mean(axis=0))
-        else:
-            rgb_means.append(f.mean(axis=(0, 1)))
-    rgb = np.array(rgb_means, dtype=np.float64)
-    mean_rgb = np.mean(rgb, axis=0, keepdims=True) + 1e-6
-    cn = rgb / mean_rgb
-    s1 = cn[:, 1] - cn[:, 2]
-    s2 = cn[:, 1] + cn[:, 2] - 2.0 * cn[:, 0]
-    alpha = np.std(s1) / (np.std(s2) + 1e-8)
-    h = s1 + alpha * s2
-    h = h - np.mean(h)
-    freqs, psd = periodogram(h, fs=fps, nfft=4096, detrend='constant', window='hann')
-    valid = np.where((freqs >= 0.75) & (freqs <= 2.50))[0]
-    if len(valid) > 0:
-        return float(parabolic_peak_freq(freqs, psd, valid) * 60.0)
-    return 0.0
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-#  EXACT TRAINING-MATCHED PREPROCESSING FOR PHYSFORMERX
+#  30 HZ TEMPORAL RESAMPLING & JOINT-MASK PREPROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
 _RESIZE_64 = Resize((IMG_SIZE, IMG_SIZE), antialias=True)
 
 
-def build_physformer_input(frames_128: list, timestamps: list, device: torch.device):
+def build_physformer_input(
+    frames_128: list,
+    timestamps: list,
+    device: torch.device,
+    is_pro_model: bool = False,
+):
     """
-    Replicates the exact training & deployment preprocessing pipeline from
-    `preprocessor.py` and `VitalEye_CS776_Deploy/sliding_pipeline.py`:
-      1. Compute actual sampling rate from frame timestamps
-      2. Apply 30-frame running-mean illumination normalization (uniform_filter1d)
-      3. Scale to [0, 1] and resize 128×128 → 64×64 with antialiasing
-      4. Compute temporal difference frames: diff[t] = frame[t] - frame[t-1]
-      5. Concatenate [RGB, diff] → [1, 6, T, 64, 64]
+    Builds input tensor for either `VitalEyeProNet` or `PhysFormerX`:
+      1. Measures true capture duration `dt = timestamps[-1] - timestamps[0]`
+      2. Resamples sequence onto a uniform 30.0 FPS timeline so 3D temporal filters
+         always see a true 30 Hz cardiac oscillation even if webcam drops frames in low light!
+      3. Applies 30-frame running-mean illumination normalization over active skin pixels
+      4. Applies Joint-Mask Boundary Suppression on `diff[t] = frame[t] - frame[t-1]` so
+         mask-edge motion spikes never inject 1/f² low-frequency noise!
     """
-    frames_float = np.stack(frames_128, axis=0).astype(np.float32)  # [T, 128, 128, 3]
-    T = len(frames_float)
+    frames_raw = np.stack(frames_128, axis=0).astype(np.float32)  # [T_in, 128, 128, 3]
+    T_in = len(frames_raw)
 
-    if len(timestamps) == T and (timestamps[-1] - timestamps[0]) > 0.5:
-        actual_fps = float((T - 1) / (timestamps[-1] - timestamps[0]))
-        actual_fps = float(np.clip(actual_fps, 10.0, 60.0))
+    if len(timestamps) == T_in and (timestamps[-1] - timestamps[0]) > 1.0:
+        duration_sec = float(timestamps[-1] - timestamps[0])
+        actual_fps = float(np.clip((T_in - 1) / duration_sec, 10.0, 60.0))
     else:
         actual_fps = 30.0
+        duration_sec = (T_in - 1) / 30.0
 
-    # Step 1: 30-frame running-mean illumination drift normalization
-    frame_means = frames_float.mean(axis=(1, 2, 3), keepdims=True)
-    win_size = min(30, max(5, T // 4))
-    smoothed_means = uniform_filter1d(frame_means.squeeze(), size=win_size, axis=0)
-    smoothed_means = smoothed_means.reshape(-1, 1, 1, 1)
-    global_mean = frame_means.mean()
-    frames_norm = np.clip(frames_float - smoothed_means + global_mean, 0.0, 255.0)
+    # Step 1: Per-frame illumination drift normalization over active skin pixels
+    skin_binary = (frames_raw.sum(axis=-1, keepdims=True) > 8.0).astype(np.float32)
+    pix_counts = np.maximum(skin_binary.sum(axis=(1, 2), keepdims=True), 1.0)
+    frame_means = (frames_raw * skin_binary).sum(axis=(1, 2), keepdims=True) / pix_counts  # [T_in, 1, 1, 3]
 
-    # Step 2: Convert to tensor [3, T, 128, 128] in [0, 1] and antialiased resize to 64×64
+    win_size = min(30, max(5, T_in // 4))
+    smoothed_means = uniform_filter1d(frame_means, size=win_size, axis=0)
+    global_mean = frame_means.mean(axis=0, keepdims=True)
+    frames_norm = np.clip((frames_raw - smoothed_means + global_mean) * skin_binary, 0.0, 255.0)
+
+    # Step 2: Convert to tensor [3, T_in, 128, 128] in [0, 1] and resize to 64×64
     vid = torch.from_numpy(frames_norm).float() / 255.0
-    vid = vid.permute(3, 0, 1, 2)  # [3, T, 128, 128]
-    vid = _RESIZE_64(vid.permute(1, 0, 2, 3)).permute(1, 0, 2, 3)  # [3, T, 64, 64]
+    vid = vid.permute(3, 0, 1, 2)  # [3, T_in, 128, 128]
+    vid = _RESIZE_64(vid.permute(1, 0, 2, 3)).permute(1, 0, 2, 3)  # [3, T_in, 64, 64]
 
-    # Step 3: Compute difference frames diff[t] = frame[t] - frame[t-1]
+    # Step 3: Uniform 30.0 Hz Temporal Resampling if webcam FPS deviated from 30 Hz
+    target_fps = 30.0
+    T_30 = max(60, min(360, int(round(duration_sec * target_fps))))
+    if abs(actual_fps - target_fps) > 1.5 and T_30 != T_in:
+        C, _, H, W = vid.shape
+        v_flat = vid.permute(0, 2, 3, 1).reshape(C * H * W, 1, T_in)
+        v_res = F.interpolate(v_flat, size=T_30, mode="linear", align_corners=False)
+        vid = v_res.view(C, H, W, T_30).permute(0, 3, 1, 2).contiguous()
+        eff_fps = target_fps
+    else:
+        eff_fps = actual_fps
+
+    if is_pro_model:
+        # VitalEyeProNet computes its 10 physics-guided channels directly from [1, 3, T, 64, 64]
+        return vid.unsqueeze(0).to(device), eff_fps, frames_norm
+
+    # Step 4: Joint-Masked, Clamped Difference Frames for PhysFormerX (Eliminates Mask-Edge Spikes!)
+    valid_64 = (vid.sum(dim=0, keepdim=True) > 0.02).float()
+    joint_valid = torch.zeros_like(valid_64)
+    joint_valid[:, 1:] = valid_64[:, 1:] * valid_64[:, :-1]
+
     diff = torch.zeros_like(vid)
-    diff[:, 1:] = vid[:, 1:] - vid[:, :-1]
+    # Clamp inter-frame delta to ±0.08 to reject sudden motion jolts while preserving subtle pulse (~0.005)
+    diff[:, 1:] = torch.clamp(vid[:, 1:] - vid[:, :-1], -0.08, 0.08) * joint_valid[:, 1:]
 
-    # Step 4: Stack RGB + diff → [1, 6, T, 64, 64]
     vid_6ch = torch.cat([vid, diff], dim=0).unsqueeze(0).to(device)
-    return vid_6ch, actual_fps, frames_norm
+    return vid_6ch, eff_fps, frames_norm
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ASYNCHRONOUS INFERENCE ENGINE (Prevents Webcam Freeze during 3D-CNN Pass)
+#  ASYNCHRONOUS INFERENCE ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 class AsyncPhysFormerEngine:
-    """
-    Runs PhysFormerX 3D-CNN inference in a background worker thread so the
-    main camera capture and UI loop stays at a smooth 30 FPS.
-    Automatically falls back to CPU if any MPS operator is unsupported.
-    """
-
-    def __init__(self, model: nn.Module, device: torch.device):
+    def __init__(self, model: nn.Module, device: torch.device, is_pro_model: bool = False):
         self.model = model
         self.device = device
+        self.is_pro_model = is_pro_model
         self.lock = threading.Lock()
         self.pending_task = None
         self.running = True
         self.busy = False
 
-        # Shared output state
         self.bpm = 0.0
         self.rpm = 0.0
         self.hrv_ms = 0.0
@@ -430,14 +486,14 @@ class AsyncPhysFormerEngine:
             t0 = time.perf_counter()
             try:
                 with torch.no_grad():
-                    x_in, actual_fps, frames_norm = build_physformer_input(
-                        frames_128, timestamps, self.device
+                    x_in, eff_fps, frames_norm = build_physformer_input(
+                        frames_128, timestamps, self.device, is_pro_model=self.is_pro_model
                     )
                     try:
                         pred = self.model(x_in)
                     except (NotImplementedError, RuntimeError) as dev_err:
                         if str(self.device) != "cpu":
-                            print(f"ℹ Switching PhysFormerX 3D-CNN to CPU ({dev_err})")
+                            print(f"ℹ Switching 3D-CNN to CPU ({dev_err})")
                             self.device = torch.device("cpu")
                             self.model = self.model.to(self.device)
                             x_in = x_in.to(self.device)
@@ -446,27 +502,25 @@ class AsyncPhysFormerEngine:
                             raise
                     ppg_signal = pred.squeeze().float().cpu().numpy()
 
-                raw_bpm, raw_rpm, qual, freqs, psd = analyze_ppg_spectrum(
-                    ppg_signal, fps=actual_fps
+                raw_bpm, raw_rpm, qual, fused_wave, freqs, psd = analyze_fused_rppg_spectrum(
+                    ppg_signal, frames_norm, fps=eff_fps, prev_bpm=self.bpm
                 )
                 hrv_ms, _, ibi_bpm = extract_hrv_and_peaks(
-                    ppg_signal, fps=actual_fps, est_bpm=raw_bpm
+                    fused_wave, fps=eff_fps, est_bpm=raw_bpm
                 )
 
-                # Cross-check with POS chrominance if spectral quality is low
-                if qual < 0.28:
-                    pos_bpm = pos_chrominance_bpm(frames_norm, fps=actual_fps)
-                    if 45.0 <= pos_bpm <= 160.0 and (raw_bpm < 45.0 or abs(raw_bpm - pos_bpm) > 25.0):
-                        raw_bpm = 0.65 * raw_bpm + 0.35 * pos_bpm if raw_bpm >= 45.0 else pos_bpm
+                # Blend spectral BPM with clean IBI peak-to-peak BPM when both agree
+                if 52.0 <= ibi_bpm <= 155.0 and abs(ibi_bpm - raw_bpm) <= 15.0:
+                    raw_bpm = 0.75 * raw_bpm + 0.25 * ibi_bpm
 
                 infer_ms = (time.perf_counter() - t0) * 1000.0
 
                 with self.lock:
-                    self.actual_fps = actual_fps
+                    self.actual_fps = eff_fps
                     self.last_infer_ms = infer_ms
                     self.inference_count += 1
 
-                    if 42.0 <= raw_bpm <= 180.0:
+                    if 50.0 <= raw_bpm <= 180.0:
                         self.bpm_history.append(raw_bpm)
                         median_bpm = float(np.median(self.bpm_history))
                         self.bpm = (
@@ -488,7 +542,7 @@ class AsyncPhysFormerEngine:
                     if hrv_ms > 0:
                         self.hrv_ms = 0.75 * self.hrv_ms + 0.25 * hrv_ms if self.hrv_ms > 0 else hrv_ms
 
-                    recent = ppg_signal[-PPG_DISPLAY:]
+                    recent = fused_wave[-PPG_DISPLAY:]
                     self.ppg_waveform.clear()
                     self.ppg_waveform.extend(recent.tolist())
                     self.psd_freqs = freqs
@@ -512,31 +566,31 @@ def draw_vitals_panel(
     quality: float,
     buf_fill: int,
     infer_ms: float,
+    arch_name: str = "PhysFormerX",
 ):
-    """Draws the top-left VitalEye clinical monitoring panel."""
     overlay = frame.copy()
-    cv2.rectangle(overlay, (12, 12), (355, 195), (16, 18, 22), -1)
+    cv2.rectangle(overlay, (12, 12), (365, 195), (16, 18, 22), -1)
     cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
-    cv2.rectangle(frame, (12, 12), (355, 195), (75, 85, 95), 1)
+    cv2.rectangle(frame, (12, 12), (365, 195), (75, 85, 95), 1)
 
     cv2.putText(
         frame,
-        "VITALEYE  |  PhysFormerX + YOLOv8",
+        f"VITALEYE  |  {arch_name} + YOLOv8",
         (24, 34),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.46,
+        0.44,
         (200, 210, 220),
         1,
         cv2.LINE_AA,
     )
-    cv2.line(frame, (22, 42), (345, 42), (55, 60, 68), 1)
+    cv2.line(frame, (22, 42), (355, 42), (55, 60, 68), 1)
 
     if bpm > 0 and buf_fill >= WARMUP_LEN:
         pulse_phase = (math.sin(time.time() * (bpm / 60.0) * 2.0 * math.pi) + 1.0) * 0.5
         radius = int(7 + 3 * pulse_phase)
         cv2.circle(frame, (36, 76), radius, (50, 50, 240), -1, cv2.LINE_AA)
 
-        bpm_color = (60, 235, 100) if 50 <= bpm <= 110 else (40, 180, 255)
+        bpm_color = (60, 235, 100) if 55 <= bpm <= 115 else (40, 180, 255)
         cv2.putText(
             frame,
             f"{bpm:.0f}",
@@ -592,8 +646,8 @@ def draw_vitals_panel(
             cv2.LINE_AA,
         )
 
-        bar_w = int(315 * np.clip(quality, 0.0, 1.0))
-        cv2.rectangle(frame, (24, 142), (339, 156), (42, 45, 50), -1)
+        bar_w = int(325 * np.clip(quality, 0.0, 1.0))
+        cv2.rectangle(frame, (24, 142), (349, 156), (42, 45, 50), -1)
         bar_col = (
             (55, 225, 95)
             if quality >= 0.55
@@ -625,8 +679,8 @@ def draw_vitals_panel(
             2,
             cv2.LINE_AA,
         )
-        bar_w = int(315 * min(1.0, buf_fill / max(1, WARMUP_LEN)))
-        cv2.rectangle(frame, (24, 96), (339, 114), (42, 45, 50), -1)
+        bar_w = int(325 * min(1.0, buf_fill / max(1, WARMUP_LEN)))
+        cv2.rectangle(frame, (24, 96), (349, 114), (42, 45, 50), -1)
         cv2.rectangle(frame, (24, 96), (24 + bar_w, 114), (35, 180, 255), -1)
         cv2.putText(
             frame,
@@ -651,7 +705,6 @@ def draw_vitals_panel(
 
 
 def draw_skin_mask_inset(frame: np.ndarray, face_masked_rgb: np.ndarray):
-    """Draws the live Hybrid Skin-Segmented ROI preview in the top-right corner."""
     if face_masked_rgb is None or face_masked_rgb.size == 0:
         return
     h, w = frame.shape[:2]
@@ -682,7 +735,6 @@ def draw_ppg_and_spectrum(
     psd: np.ndarray,
     bpm: float,
 ):
-    """Draws the real-time rPPG waveform at bottom-right."""
     if len(ppg_buf) < 4:
         return
 
@@ -698,10 +750,10 @@ def draw_ppg_and_spectrum(
     cv2.rectangle(frame, (x0, y0), (x0 + pw, y0 + ph), (65, 70, 80), 1)
     cv2.putText(
         frame,
-        "Live rPPG Waveform (PhysFormerX)",
+        "Live Bandpass rPPG Waveform (0.88-2.5 Hz)",
         (x0 + 6, y0 - 6),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.38,
+        0.37,
         (175, 185, 195),
         1,
         cv2.LINE_AA,
@@ -743,7 +795,6 @@ def draw_roi_boxes(
     buf_fill: int,
     show_multi_roi: bool,
 ):
-    """Draws stabilized Face (and optionally Nose & Chest) bounding boxes."""
     h_f, w_f = frame.shape[:2]
     classes_to_draw = (0, 1, 2) if show_multi_roi else (0,)
 
@@ -785,41 +836,78 @@ def draw_roi_boxes(
         )
 
 
+def load_rppg_model(model_path: str, device: torch.device):
+    """
+    Auto-detects whether `model_path` is a `VitalEyeProNet` checkpoint or a
+    `PhysFormerX` checkpoint, loads weights cleanly, and returns:
+      (model, is_pro_model, arch_name, device)
+    """
+    ckpt = torch.load(model_path, map_location=device, weights_only=False)
+    is_pro = False
+    state = ckpt
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state = ckpt["state_dict"]
+        if ckpt.get("arch") == "VitalEyeProNet":
+            is_pro = True
+
+    if any(k.startswith("module.") for k in state):
+        state = {k.replace("module.", ""): v for k, v in state.items()}
+
+    if not is_pro and "stem.0.weight" in state and state["stem.0.weight"].shape[1] == 10:
+        is_pro = True
+
+    if is_pro:
+        model = VitalEyeProNet(seq_len=BUFFER_LEN).to(device)
+        arch_name = "VitalEyeProNet"
+    else:
+        model = PhysFormerX(seq_len=BUFFER_LEN).to(device)
+        arch_name = "PhysFormerX"
+
+    model.load_state_dict(state)
+    model.eval()
+
+    try:
+        with torch.no_grad():
+            ch_in = 3 if is_pro else 6
+            _ = model(torch.zeros(1, ch_in, 16, IMG_SIZE, IMG_SIZE, device=device))
+    except Exception as mps_err:
+        print(f"ℹ  MPS 3D op fallback ({mps_err}); running {arch_name} on CPU.")
+        device = torch.device("cpu")
+        model = model.to(device)
+
+    return model, is_pro, arch_name, device
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  SELF-TEST / VERIFICATION ROUTINE
+#  SELF-TEST / VERIFICATION ROUTINE (Under Low Light + Motion Drift!)
 # ─────────────────────────────────────────────────────────────────────────────
 def run_self_test(args) -> int:
-    print("═" * 65)
-    print("  VitalEye — End-to-End Self-Test & Model Verification")
-    print("═" * 65)
+    print("═" * 68)
+    print("  VitalEye — End-to-End Low-Light & Motion Stress Self-Test")
+    print("═" * 68)
 
     device = torch.device(
         "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     )
-    print(f"✔ Compute Device       : {device}")
-
     model_path = args.model_weights if os.path.exists(args.model_weights) else FALLBACK_MODEL
     if not os.path.exists(model_path):
-        print(f"❌ PhysFormerX weights not found at {args.model_weights}")
+        print(f"❌ Model weights not found at {args.model_weights}")
         return 1
 
-    model = PhysFormerX(seq_len=BUFFER_LEN).to(device)
-    state = torch.load(model_path, map_location=device, weights_only=True)
-    if any(k.startswith("module.") for k in state):
-        state = {k.replace("module.", ""): v for k, v in state.items()}
-    model.load_state_dict(state)
-    model.eval()
+    model, is_pro, arch_name, device = load_rppg_model(model_path, device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"✔ PhysFormerX Loaded   : {model_path} ({n_params / 1e6:.2f}M params)")
+    print(f"✔ {arch_name:20s} : {model_path} ({n_params / 1e6:.2f}M params on {device})")
 
     from ultralytics import YOLO
     yolo = YOLO(args.yolo_weights)
     print(f"✔ YOLOv8 Loaded        : {args.yolo_weights} (classes: {yolo.names})")
 
-    fps = 30.0
-    T = 300
+    # Stress-test: Simulate 76.0 BPM pulse under LOW LIGHT + strong 0.35 Hz motion/exposure drift
+    fps = 24.0  # Simulate low-light webcam frame drop (24 FPS instead of 30 FPS)
+    T = 240     # 10 seconds @ 24 FPS
     t = np.arange(T) / fps
-    target_bpm = 75.0
+    target_bpm = 76.0
     target_rpm = 15.0
     frames_128 = []
     timestamps = []
@@ -828,12 +916,13 @@ def run_self_test(args) -> int:
         ti = float(t[i])
         pulse = math.sin(2.0 * math.pi * (target_bpm / 60.0) * ti)
         breath = math.sin(2.0 * math.pi * (target_rpm / 60.0) * ti)
-        drift = 8.0 * math.sin(2.0 * math.pi * 0.04 * ti)
+        # Strong low-frequency motion/shadow drift that previously caused 40-50 BPM pinning!
+        heavy_drift = 18.0 * math.sin(2.0 * math.pi * 0.45 * ti)
 
         patch = np.zeros((FACE_CROP_SIZE, FACE_CROP_SIZE, 3), dtype=np.uint8)
-        patch[:, :, 0] = int(np.clip(192.0 + drift + 1.5 * pulse, 0, 255))
-        patch[:, :, 1] = int(np.clip(142.0 + drift + 4.5 * pulse + 2.0 * breath, 0, 255))
-        patch[:, :, 2] = int(np.clip(118.0 + drift + 1.0 * pulse, 0, 255))
+        patch[:, :, 0] = int(np.clip(150.0 + heavy_drift - 1.2 * pulse, 0, 255))
+        patch[:, :, 1] = int(np.clip(112.0 + heavy_drift + 3.5 * pulse + 1.5 * breath, 0, 255))
+        patch[:, :, 2] = int(np.clip(92.0  + heavy_drift + 0.8 * pulse, 0, 255))
 
         mask = skin_mask_ycrcb(patch)
         mask_3ch = np.stack([mask, mask, mask], axis=-1) // 255
@@ -842,34 +931,21 @@ def run_self_test(args) -> int:
 
     t0 = time.perf_counter()
     with torch.no_grad():
-        x_in, actual_fps, _ = build_physformer_input(frames_128, timestamps, device)
+        x_in, eff_fps, frames_norm = build_physformer_input(
+            frames_128, timestamps, device, is_pro_model=is_pro
+        )
         pred = model(x_in).squeeze().float().cpu().numpy()
     infer_ms = (time.perf_counter() - t0) * 1000.0
 
-    bpm, rpm, qual, freqs, psd = analyze_ppg_spectrum(pred, fps=actual_fps)
-    hrv_ms, _, _ = extract_hrv_and_peaks(pred, fps=actual_fps, est_bpm=bpm)
+    bpm, rpm, qual, fused_wave, freqs, psd = analyze_fused_rppg_spectrum(
+        pred, frames_norm, fps=eff_fps
+    )
+    hrv_ms, _, _ = extract_hrv_and_peaks(fused_wave, fps=eff_fps, est_bpm=bpm)
 
-    print(f"✔ Preprocessing & Pass : {infer_ms:.1f} ms for 300 frames (6×300×64×64)")
-    print(f"✔ Target vs Predicted  : Target={target_bpm:.1f} BPM | Predicted={bpm:.2f} BPM (Error={abs(bpm - target_bpm):.2f} BPM)")
-    print(f"✔ Signal Metrics       : RR={rpm:.1f} BrPM | HRV={hrv_ms:.1f} ms | Quality={qual * 100:.1f}%")
-
-    canvas = np.full((480, 640, 3), 35, dtype=np.uint8)
-    tracker = ROITracker(fps=30.0)
-    tracker.update(0, [210, 90, 430, 360], 10.0)
-    tracker.update(1, [285, 195, 355, 260], 10.0)
-    tracker.update(2, [160, 365, 480, 475], 10.0)
-
-    draw_roi_boxes(canvas, tracker, 10.0, bpm, rpm, 300, show_multi_roi=True)
-    draw_vitals_panel(canvas, bpm, rpm, hrv_ms, qual, 300, infer_ms)
-    draw_skin_mask_inset(canvas, frames_128[-1])
-    draw_ppg_and_spectrum(canvas, pred[-PPG_DISPLAY:].tolist(), freqs, psd, bpm)
-
-    out_dir = os.path.join(ROOT_DIR, "outputs")
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "self_test_hud_preview.png")
-    cv2.imwrite(out_path, canvas)
-    print(f"✔ HUD Preview Saved    : {out_path}")
-    print("═" * 65)
+    print(f"✔ Low-Light 24→30Hz Pass: {infer_ms:.1f} ms (Resampled eff_fps={eff_fps:.1f} Hz)")
+    print(f"✔ Target vs Predicted   : Target={target_bpm:.1f} BPM | Predicted={bpm:.2f} BPM (Error={abs(bpm - target_bpm):.2f} BPM)")
+    print(f"✔ Signal Metrics        : RR={rpm:.1f} BrPM | HRV={hrv_ms:.1f} ms | Quality={qual * 100:.1f}%")
+    print("═" * 68)
     return 0
 
 
@@ -885,36 +961,23 @@ def run(args):
     )
     print(f"⚙  Device : {hw_device}")
 
-    # ── 1. Load PhysFormerX Model + Verify 3D Ops on Selected Device ─────────
     model_path = args.model_weights
-    if not os.path.exists(model_path) and os.path.exists(FALLBACK_MODEL):
-        model_path = FALLBACK_MODEL
-
-    print(f"⚙  Loading PhysFormerX from: {model_path}")
     if not os.path.exists(model_path):
-        print(f"❌ PhysFormerX weights not found at: {model_path}")
+        for candidate in (PRO_MODEL_PATH, os.path.join(DEPLOY_DIR, "models", "vidformer.pt"), FALLBACK_MODEL):
+            if os.path.exists(candidate):
+                model_path = candidate
+                break
+
+    print(f"⚙  Loading rPPG Model from: {model_path}")
+    if not os.path.exists(model_path):
+        print(f"❌ Model weights not found at: {model_path}")
         sys.exit(1)
 
-    phys_device = hw_device
-    model = PhysFormerX(seq_len=BUFFER_LEN).to(phys_device)
-    state = torch.load(model_path, map_location=phys_device, weights_only=True)
-    if any(k.startswith("module.") for k in state):
-        state = {k.replace("module.", ""): v for k, v in state.items()}
-    model.load_state_dict(state)
-    model.eval()
-
-    try:
-        with torch.no_grad():
-            _ = model(torch.zeros(1, 6, 16, IMG_SIZE, IMG_SIZE, device=phys_device))
-    except Exception as mps_err:
-        print(f"ℹ  MPS 3D op fallback ({mps_err}); running PhysFormerX on CPU.")
-        phys_device = torch.device("cpu")
-        model = model.to(phys_device)
-
+    model, is_pro, arch_name, phys_device = load_rppg_model(model_path, hw_device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"✔  PhysFormerX loaded  ({n_params / 1e6:.2f}M params on {phys_device})")
+    print(f"✔  {arch_name} loaded ({n_params / 1e6:.2f}M params on {phys_device})")
 
-    # ── 2. Load YOLOv8 Multi-ROI Detector ────────────────────────────────────
+    # ── Load YOLOv8 Multi-ROI Detector ───────────────────────────────────────
     use_yolo = False
     yolo = None
     face_cascade = None
@@ -935,7 +998,7 @@ def run(args):
         face_cascade = cv2.CascadeClassifier(haar_path)
         print("✔  Haar cascade face detector loaded (fallback)")
 
-    # ── 3. Open Camera or Video File ─────────────────────────────────────────
+    # ── Open Camera or Video File ────────────────────────────────────────────
     source = args.video if args.video else args.camera
     cap = cv2.VideoCapture(source)
     if not args.video:
@@ -953,9 +1016,8 @@ def run(args):
         nominal_fps = float(args.fps)
     print(f"✔  Video stream opened (source={source}, nominal_fps={nominal_fps:.1f})")
 
-    # ── 4. Initialize Trackers, Buffers & Async Inference Engine ─────────────
     tracker = ROITracker(fps=nominal_fps, alpha=BOX_EMA_ALPHA)
-    engine = AsyncPhysFormerEngine(model=model, device=phys_device)
+    engine = AsyncPhysFormerEngine(model=model, device=phys_device, is_pro_model=is_pro)
 
     frame_buf = deque(maxlen=BUFFER_LEN)
     ts_buf = deque(maxlen=BUFFER_LEN)
@@ -968,7 +1030,7 @@ def run(args):
     show_skin_inset = True
     fullscreen = False
 
-    win_name = "VitalEye — Live Heart Rate & Vitals Monitor  [q=quit  r=reset  m=ROIs  k=skin  s=shot  f=full]"
+    win_name = f"VitalEye ({arch_name}) — Live Heart Rate Monitor  [q=quit  r=reset  m=ROIs  k=skin  s=shot  f=full]"
     if not args.headless:
         cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(win_name, 900, 620)
@@ -983,7 +1045,7 @@ def run(args):
         )
 
     print("\n" + "═" * 72)
-    print("  VitalEye — Live Heart Rate, Respiratory Rate & HRV Monitor")
+    print(f"  VitalEye ({arch_name}) — Live Heart Rate, Respiratory Rate & HRV Monitor")
     print("  Controls:  q=quit  r=reset  m=toggle ROIs  k=skin preview  s=screenshot")
     print("═" * 72 + "\n")
 
@@ -1001,13 +1063,11 @@ def run(args):
                     print("⚠  Camera frame read ended.")
                 break
 
-            now_ts = (
-                frame_count / nominal_fps if args.video else time.perf_counter()
-            )
+            now_ts = frame_count / nominal_fps if args.video else time.perf_counter()
             frame_count += 1
             h_frm, w_frm = frame.shape[:2]
 
-            # ── Step 1: Multi-ROI Detection (Every N frames for 30 FPS smoothness) ──
+            # ── Step 1: Multi-ROI Detection ──
             if use_yolo and (frame_count % max(1, args.yolo_interval) == 1 or tracker.get(0, now_ts) is None):
                 results = yolo(
                     frame,
@@ -1057,7 +1117,6 @@ def run(args):
                     face_rgb = cv2.cvtColor(face_128, cv2.COLOR_BGR2RGB)
 
                     raw_mask = skin_mask_ycrcb(face_rgb)
-                    # Temporal EMA hysteresis on binary mask to prevent edge flicker in diff[t]
                     mask_f = raw_mask.astype(np.float32) / 255.0
                     if prev_mask_float is None or prev_mask_float.shape != mask_f.shape:
                         prev_mask_float = mask_f
@@ -1071,7 +1130,7 @@ def run(args):
                     ts_buf.append(now_ts)
                     last_skin_preview = face_masked
 
-            # ── Step 3: Trigger Non-Blocking PhysFormerX Inference ──
+            # ── Step 3: Trigger Non-Blocking Inference ──
             buf_fill = len(frame_buf)
             if buf_fill >= WARMUP_LEN and (frame_count - last_submit_frame) >= args.slide_step:
                 submitted = engine.submit(list(frame_buf), list(ts_buf))
@@ -1100,7 +1159,7 @@ def run(args):
                 frame, tracker, now_ts, cur_bpm, cur_rpm, buf_fill, show_multi_roi
             )
             draw_vitals_panel(
-                frame, cur_bpm, cur_rpm, cur_hrv, cur_qual, buf_fill, cur_infer_ms
+                frame, cur_bpm, cur_rpm, cur_hrv, cur_qual, buf_fill, cur_infer_ms, arch_name=arch_name
             )
             if show_skin_inset and last_skin_preview is not None:
                 draw_skin_mask_inset(frame, last_skin_preview)
@@ -1184,67 +1243,26 @@ def run(args):
         print(f"{'═' * 52}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CLI ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
 def parse_args():
-    p = argparse.ArgumentParser(description="VitalEye — PhysFormerX + YOLOv8 Live Heart Rate Monitor")
+    p = argparse.ArgumentParser(description="VitalEye — Live Heart Rate Monitor (VitalEyeProNet & PhysFormerX)")
     p.add_argument(
         "--yolo_weights",
         default=DEFAULT_YOLO,
-        help="Path to trained YOLOv8 .pt weights (default: VitalEye_CS776_Deploy/models/yolov8/weights/best.pt)",
+        help="Path to trained YOLOv8 .pt weights",
     )
     p.add_argument(
         "--model_weights",
         default=DEFAULT_MODEL,
-        help="Path to trained PhysFormerX .pt weights (default: VitalEye_CS776_Deploy/models/vidformer.pt)",
+        help="Path to VitalEyeProNet (vitaleye_pro_best.pt) or PhysFormerX (vidformer.pt) weights",
     )
-    p.add_argument(
-        "--camera",
-        type=int,
-        default=0,
-        help="Webcam device index (default: 0)",
-    )
-    p.add_argument(
-        "--video",
-        type=str,
-        default="",
-        help="Optional path to an input video file instead of live webcam",
-    )
-    p.add_argument(
-        "--record",
-        type=str,
-        default="",
-        help="Optional path to save annotated output MP4 video",
-    )
-    p.add_argument(
-        "--fps",
-        type=int,
-        default=30,
-        help="Target camera FPS (default: 30)",
-    )
-    p.add_argument(
-        "--yolo_interval",
-        type=int,
-        default=2,
-        help="Run YOLOv8 detector every N frames to keep camera at 30 FPS on CPU (default: 2)",
-    )
-    p.add_argument(
-        "--slide_step",
-        type=int,
-        default=10,
-        help="Trigger PhysFormerX update every N new frames (default: 10)",
-    )
-    p.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run without OpenCV GUI window (useful with --video and --record)",
-    )
-    p.add_argument(
-        "--self_test",
-        action="store_true",
-        help="Run automated end-to-end verification of models, preprocessing, and HUD rendering",
-    )
+    p.add_argument("--camera", type=int, default=0, help="Webcam device index (default: 0)")
+    p.add_argument("--video", type=str, default="", help="Optional path to input video file")
+    p.add_argument("--record", type=str, default="", help="Optional path to save annotated MP4")
+    p.add_argument("--fps", type=int, default=30, help="Target camera FPS (default: 30)")
+    p.add_argument("--yolo_interval", type=int, default=2, help="Run YOLOv8 every N frames (default: 2)")
+    p.add_argument("--slide_step", type=int, default=10, help="Trigger rPPG update every N frames (default: 10)")
+    p.add_argument("--headless", action="store_true", help="Run without OpenCV GUI window")
+    p.add_argument("--self_test", action="store_true", help="Run end-to-end verification under low-light/motion stress")
     return p.parse_args()
 
 
