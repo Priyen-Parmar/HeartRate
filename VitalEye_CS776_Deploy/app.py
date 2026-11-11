@@ -14,6 +14,7 @@ def process_video(video_path):
         
     # Generate unique run directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     output_dir = os.path.join("outputs", timestamp)
     os.makedirs(output_dir, exist_ok=True)
     out_mp4 = os.path.join(output_dir, "annotated_output.mp4")
