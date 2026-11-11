@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 # YOLO & Tracking
 from ultralytics import YOLO
-from huggingface_hub import hf_hub_download
 from OneEuroFilter import OneEuroFilter
 
 # Physformer
@@ -22,12 +21,12 @@ def rr_from_signal(signals: np.ndarray, fps: int = 30) -> np.ndarray:
     rrs = []
     for s in signals:
         s = s - np.mean(s)
-        freqs, psd = periodogram(s, fs=fps, nfft=2048, detrend='constant', window='hann')
-        valid = np.where((freqs >= 0.02) & (freqs <= 0.38))[0] # 12 to 60 BRPM
+        freqs, psd = periodogram(s, fs=fps, nfft=4096, detrend='constant', window='hann')
+        valid = np.where((freqs >= 0.15) & (freqs <= 0.40))[0] # 9 to 24 BRPM
         if len(valid) > 0:
             rrs.append(freqs[valid][np.argmax(psd[valid])] * 60.0)
         else:
-            rrs.append(20.0)
+            rrs.append(15.0)
     return np.array(rrs)
 
 def smooth_box(prev_box, new_box, alpha=0.8):
@@ -41,7 +40,7 @@ def main(args_obj=None):
         parser = argparse.ArgumentParser("Sliding Window Physformer Pipeline")
         parser.add_argument("--video", required=True, help="Path to input video")
         parser.add_argument("--yolo_weights", default="models/yolov8/weights/best.pt", help="YOLO checkpoint local path")
-        parser.add_argument("--physformer_weights", default="models/physformer.pt", help="Physformer checkpoint local path")
+        parser.add_argument("--physformer_weights", default="models/vidformer.pt", help="Physformer checkpoint local path")
         parser.add_argument("--hf_repo", default="pushpender-23/yolo-cs776-model", help="Hugging Face repository ID for automated fallback downloads")
         parser.add_argument("--yolo_hf_file", default="train_medium_v1/weights/best.pt", help="YOLO filename in HF repo")
         parser.add_argument("--physformer_hf_file", default="physformer.pt", help="Physformer filename in HF repo")
@@ -55,31 +54,42 @@ def main(args_obj=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # -------------------------------------------------------------
-    # 1. Initialize Models (with HF Kaggle Auto-Fetch & OpenVINO CPU Acceleration)
+    # 1. Initialize Models (with HF Auto-Fetch & Optional OpenVINO Acceleration)
     # -------------------------------------------------------------
     print("⚙️ Initializing YOLOv8 & Physformer...")
     
     yolo_path = args.yolo_weights
     if not os.path.exists(yolo_path):
         print(f"⚠️ YOLO weights not found locally. Auto-fetching from HF: {args.hf_repo}...")
+        from huggingface_hub import hf_hub_download
         yolo_path = hf_hub_download(repo_id=args.hf_repo, filename=args.yolo_hf_file, local_dir="models")
         
-    # OpenVINO CPU Acceleration for Hugging Face Spaces Zero-GPU
+    # Optional OpenVINO CPU Acceleration if openvino is installed
+    yolo_model = None
     if not torch.cuda.is_available():
-        print("⚡ CPU detected! Optimizing YOLOv8 using OpenVINO for massive speedup...")
-        openvino_dir = yolo_path.replace('.pt', '_openvino_model')
-        if not os.path.exists(openvino_dir):
-            print("Exporting model to OpenVINO format for the first time...")
-            base_model = YOLO(yolo_path)
-            base_model.export(format='openvino', imgsz=320, dynamic=True)
-        yolo_model = YOLO(openvino_dir)
+        try:
+            import openvino  # noqa: F401
+            print("⚡ CPU detected! Optimizing YOLOv8 using OpenVINO for massive speedup...")
+            openvino_dir = yolo_path.replace('.pt', '_openvino_model')
+            if not os.path.exists(openvino_dir):
+                print("Exporting model to OpenVINO format for the first time...")
+                base_model = YOLO(yolo_path)
+                base_model.export(format='openvino', imgsz=320, dynamic=True)
+            yolo_model = YOLO(openvino_dir)
+        except Exception:
+            yolo_model = YOLO(yolo_path)
     else:
         yolo_model = YOLO(yolo_path)
     
     physformer_path = args.physformer_weights
     if not os.path.exists(physformer_path):
-        print(f"⚠️ Physformer weights not found locally. Auto-fetching from HF: {args.hf_repo}...")
-        physformer_path = hf_hub_download(repo_id=args.hf_repo, filename=args.physformer_hf_file, local_dir="models")
+        alt_path = os.path.join(os.path.dirname(physformer_path), "vidformer.pt")
+        if os.path.exists(alt_path):
+            physformer_path = alt_path
+        else:
+            print(f"⚠️ Physformer weights not found locally. Auto-fetching from HF: {args.hf_repo}...")
+            from huggingface_hub import hf_hub_download
+            physformer_path = hf_hub_download(repo_id=args.hf_repo, filename=args.physformer_hf_file, local_dir="models")
         
     vid_model = PhysFormerX(seq_len=300).to(device)
     vid_model.load_state_dict(torch.load(physformer_path, map_location=device, weights_only=True))

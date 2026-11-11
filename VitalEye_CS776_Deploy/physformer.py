@@ -45,14 +45,14 @@ GRAD_CLIP  = 2.0
 PATIENCE   = 15
 
 # ═══════════════════════════════════════════════════════════════
-#  BPM HELPER
+#  BPM & RPM HELPERS
 # ═══════════════════════════════════════════════════════════════
-def bpm_from_signal(signals: np.ndarray, fps: int = FPS) -> np.ndarray:
+def bpm_from_signal(signals: np.ndarray, fps: float = FPS) -> np.ndarray:
     """Periodogram-based BPM. signals: (B, T) numpy float."""
     bpms = []
     for s in signals:
         s = s - np.mean(s)
-        freqs, psd = periodogram(s, fs=fps, nfft=2048, detrend='constant',
+        freqs, psd = periodogram(s, fs=fps, nfft=4096, detrend='constant',
                                  window='hann')
         valid = np.where((freqs >= 0.75) & (freqs <= 2.5))[0]
         if len(valid) > 0:
@@ -60,6 +60,21 @@ def bpm_from_signal(signals: np.ndarray, fps: int = FPS) -> np.ndarray:
         else:
             bpms.append(75.0)
     return np.array(bpms)
+
+
+def rpm_from_signal(signals: np.ndarray, fps: float = FPS) -> np.ndarray:
+    """Periodogram-based Respiratory Rate (BrPM) in 0.15-0.40 Hz (9-24 BrPM)."""
+    rpms = []
+    for s in signals:
+        s = s - np.mean(s)
+        freqs, psd = periodogram(s, fs=fps, nfft=4096, detrend='constant',
+                                 window='hann')
+        valid = np.where((freqs >= 0.15) & (freqs <= 0.40))[0]
+        if len(valid) > 0:
+            rpms.append(freqs[valid][np.argmax(psd[valid])] * 60.0)
+        else:
+            rpms.append(15.0)
+    return np.array(rpms)
 
 # ═══════════════════════════════════════════════════════════════
 #  DATASET — with diff-frame and temporal cropping
