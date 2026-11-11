@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 export YOLO_CONFIG_DIR="/tmp/Ultralytics"
+export PYTORCH_ENABLE_MPS_FALLBACK=1
 
 if [ -x "/usr/local/bin/python3.12" ]; then
     PYTHON_BIN="/usr/local/bin/python3.12"

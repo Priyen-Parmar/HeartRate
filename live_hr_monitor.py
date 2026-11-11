@@ -6,13 +6,19 @@ End-to-end real-time contactless physiological monitoring system using:
   1. Custom YOLOv8 Multi-ROI Detector (models/yolov8/weights/best.pt)
      — Tracks Face (Class 0), Nose (Class 1), and Chest (Class 2)
      — Stabilized via OneEuroFilter + Exponential Moving Average (EMA)
-  2. Exact Training-Matched Spatiotemporal Preprocessor
-     — 128×128 YCbCr Skin Segmentation (Cr ∈ [133,173], Cb ∈ [77,127])
+  2. Hybrid 468-Landmark FaceMesh + Multi-Zone Adaptive Skin Segmentation
+     — 468-pt 3D FaceMesh contour (`models/face_landmark.tflite` via OpenCV DNN)
+       eliminates background walls/bricks and carves out eyes, eyeglasses, eyebrows,
+       nostrils, lips, and mustache
+     — Multi-Zone Illumination-Invariant Chrominance (YCrCb + CIE LAB) preserves both
+       lit and shaded cheeks while local luminance ratio rejects beard/stubble & dark rims
+     — Temporal EMA mask hysteresis prevents edge flicker in difference frames
      — 30-frame Running-Mean Illumination Drift Normalization
      — Antialiased 64×64 Resize + 6-Channel [RGB, ΔRGB] Representation
   3. PhysFormerX v3 3D-ResNet + SE Attention Model (models/vidformer.pt)
+     — Apple Silicon MPS-compatible 3D pooling + automatic CPU fallback
      — Asynchronous background inference thread for stutter-free 30 FPS video
-     — Fast 5-second initial readout (150 frames) expanding to 10s (300 frames)
+     — Fast 4-second initial readout (120 frames) expanding to 10s (300 frames)
   4. Real-Timestamp Spectral & HRV Analysis (VitalEye Report & Paper-3)
      — Hann-windowed 4096-pt FFT with parabolic peak interpolation for HR (BPM)
      — Dual-band Respiratory Rate (BrPM) in 0.15–0.40 Hz (9–24 BrPM)
@@ -22,7 +28,7 @@ Controls:
   q / ESC — Quit and display session summary
   r       — Reset buffers and recalibrate
   m       — Toggle Multi-ROI boxes (Face only vs. Face + Nose + Chest)
-  k       — Toggle live YCbCr Skin-Mask inset preview
+  k       — Toggle live Hybrid Skin-Mask inset preview
   s       — Save annotated screenshot
   f       — Toggle fullscreen
 
@@ -30,14 +36,13 @@ Usage:
   ./run_live_hr.sh
   # or:
   /usr/local/bin/python3.12 live_hr_monitor.py
-  /usr/local/bin/python3.12 live_hr_monitor.py --video path/to/video.mp4
-  /usr/local/bin/python3.12 live_hr_monitor.py --self_test
 """
 
 import os
 import sys
 
-# Ensure writable config dir for Ultralytics before importing
+# Enable MPS fallback & writable Ultralytics config BEFORE importing torch / ultralytics
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
 
 # Auto-switch to /usr/local/bin/python3.12 on macOS if launched with system Python lacking torch
@@ -63,7 +68,6 @@ import torch.nn as nn
 from torchvision.transforms import Resize
 from scipy.signal import periodogram, butter, filtfilt, find_peaks
 from scipy.ndimage import uniform_filter1d
-from scipy.interpolate import interp1d
 
 # ─── Add deploy folder to path so we can import physformer, preprocessor, OneEuroFilter ───
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,11 +88,11 @@ DEFAULT_MODEL   = os.path.join(DEPLOY_DIR, "models", "vidformer.pt")
 FALLBACK_MODEL  = os.path.join(DEPLOY_DIR, "models", "physformer.pt")
 
 BUFFER_LEN      = 300        # Full window: 300 frames (~10 s @ 30 fps)
-WARMUP_LEN      = 150        # Fast initial readout: 150 frames (~5 s @ 30 fps, matches training CROP_LEN)
+WARMUP_LEN      = 120        # Fast initial readout: 120 frames (~4 s @ 30 fps)
 FACE_CROP_SIZE  = 128        # Matches preprocessor.py FACE_SIZE = 128 for accurate YCbCr morphology
 IMG_SIZE        = 64         # Matches PhysFormerX spatial input (64×64)
-BPM_EMA_ALPHA   = 0.72       # Temporal smoothing for BPM display
-RPM_EMA_ALPHA   = 0.78       # Temporal smoothing for Respiratory Rate display
+BPM_EMA_ALPHA   = 0.70       # Temporal smoothing for BPM display
+RPM_EMA_ALPHA   = 0.75       # Temporal smoothing for Respiratory Rate display
 BOX_EMA_ALPHA   = 0.80       # EMA box stabilization (matches preprocessor.py / sliding_pipeline.py)
 PPG_DISPLAY     = 180        # Number of recent PPG samples shown in live waveform graph
 
@@ -123,7 +127,10 @@ class ROITracker:
     def update(self, cls_id: int, raw_box: list, timestamp: float) -> list:
         filt = self.euro_filters.get(cls_id)
         if filt is not None:
-            euro_box = [filt[i](raw_box[i], timestamp) for i in range(4)]
+            try:
+                euro_box = [filt[i](raw_box[i], timestamp) for i in range(4)]
+            except ZeroDivisionError:
+                euro_box = raw_box
         else:
             euro_box = raw_box
 
@@ -199,7 +206,6 @@ def analyze_ppg_spectrum(signal: np.ndarray, fps: float = 30.0):
     if len(hr_valid) > 0:
         f_hr = parabolic_peak_freq(freqs, psd, hr_valid)
         bpm = f_hr * 60.0
-        # Spectral concentration quality score around peak (±0.15 Hz)
         peak_band = np.where((freqs >= f_hr - 0.15) & (freqs <= f_hr + 0.15))[0]
         peak_power = np.sum(psd[peak_band])
         total_hr_power = np.sum(psd[hr_valid]) + 1e-9
@@ -236,14 +242,12 @@ def extract_hrv_and_peaks(signal: np.ndarray, fps: float = 30.0, est_bpm: float 
     except Exception:
         filtered = signal.astype(np.float64) - np.mean(signal)
 
-    # Minimum distance between beats (~0.4s = 150 BPM max)
     min_dist = max(int(fps * 0.40), 4)
     peaks, _ = find_peaks(filtered, distance=min_dist, prominence=np.std(filtered) * 0.25)
 
     if len(peaks) < 3:
         return 0.0, peaks.tolist(), 0.0
 
-    # Quadratic interpolation around each peak (Paper-3 Section II-B)
     refined_times = []
     for p in peaks:
         if 0 < p < len(filtered) - 1:
@@ -256,13 +260,11 @@ def extract_hrv_and_peaks(signal: np.ndarray, fps: float = 30.0, est_bpm: float 
             refined_times.append(p / fps)
 
     refined_times = np.array(refined_times)
-    ibis = np.diff(refined_times)  # seconds
-    # Valid physiological IBI range: 0.35s (171 BPM) to 1.4s (43 BPM)
+    ibis = np.diff(refined_times)
     ibis = ibis[(ibis >= 0.35) & (ibis <= 1.40)]
     if len(ibis) < 2:
         return 0.0, peaks.tolist(), 0.0
 
-    # 3-sigma outlier removal (Paper-3 Section II-C)
     mu, sigma = np.mean(ibis), np.std(ibis)
     if sigma > 1e-6:
         clean_ibis = ibis[np.abs(ibis - mu) <= 3.0 * sigma]
@@ -285,7 +287,6 @@ def pos_chrominance_bpm(frames_rgb_128: np.ndarray, fps: float = 30.0) -> float:
     T = len(frames_rgb_128)
     if T < 60:
         return 0.0
-    # Compute spatial RGB mean over non-zero (skin) pixels per frame
     rgb_means = []
     for f in frames_rgb_128:
         mask = f.sum(axis=-1) > 0
@@ -293,10 +294,9 @@ def pos_chrominance_bpm(frames_rgb_128: np.ndarray, fps: float = 30.0) -> float:
             rgb_means.append(f[mask].mean(axis=0))
         else:
             rgb_means.append(f.mean(axis=(0, 1)))
-    rgb = np.array(rgb_means, dtype=np.float64)  # [T, 3]
+    rgb = np.array(rgb_means, dtype=np.float64)
     mean_rgb = np.mean(rgb, axis=0, keepdims=True) + 1e-6
     cn = rgb / mean_rgb
-    # POS projection: S1 = G - B, S2 = G + B - 2R
     s1 = cn[:, 1] - cn[:, 2]
     s2 = cn[:, 1] + cn[:, 2] - 2.0 * cn[:, 0]
     alpha = np.std(s1) / (np.std(s2) + 1e-8)
@@ -320,23 +320,21 @@ def build_physformer_input(frames_128: list, timestamps: list, device: torch.dev
     Replicates the exact training & deployment preprocessing pipeline from
     `preprocessor.py` and `VitalEye_CS776_Deploy/sliding_pipeline.py`:
       1. Compute actual sampling rate from frame timestamps
-      2. If timestamps have jitter, resample sequence to uniform 30 FPS grid
-      3. Apply 30-frame running-mean illumination normalization (uniform_filter1d)
-      4. Scale to [0, 1] and resize 128×128 → 64×64 with antialiasing
-      5. Compute temporal difference frames: diff[t] = frame[t] - frame[t-1]
-      6. Concatenate [RGB, diff] → [1, 6, T, 64, 64]
+      2. Apply 30-frame running-mean illumination normalization (uniform_filter1d)
+      3. Scale to [0, 1] and resize 128×128 → 64×64 with antialiasing
+      4. Compute temporal difference frames: diff[t] = frame[t] - frame[t-1]
+      5. Concatenate [RGB, diff] → [1, 6, T, 64, 64]
     """
     frames_float = np.stack(frames_128, axis=0).astype(np.float32)  # [T, 128, 128, 3]
     T = len(frames_float)
 
-    # Calculate true FPS from monotonic capture timestamps
     if len(timestamps) == T and (timestamps[-1] - timestamps[0]) > 0.5:
         actual_fps = float((T - 1) / (timestamps[-1] - timestamps[0]))
         actual_fps = float(np.clip(actual_fps, 10.0, 60.0))
     else:
         actual_fps = 30.0
 
-    # Step 1: 30-frame running-mean illumination drift normalization (Stage 1 Step 4)
+    # Step 1: 30-frame running-mean illumination drift normalization
     frame_means = frames_float.mean(axis=(1, 2, 3), keepdims=True)
     win_size = min(30, max(5, T // 4))
     smoothed_means = uniform_filter1d(frame_means.squeeze(), size=win_size, axis=0)
@@ -365,6 +363,7 @@ class AsyncPhysFormerEngine:
     """
     Runs PhysFormerX 3D-CNN inference in a background worker thread so the
     main camera capture and UI loop stays at a smooth 30 FPS.
+    Automatically falls back to CPU if any MPS operator is unsupported.
     """
 
     def __init__(self, model: nn.Module, device: torch.device):
@@ -434,7 +433,17 @@ class AsyncPhysFormerEngine:
                     x_in, actual_fps, frames_norm = build_physformer_input(
                         frames_128, timestamps, self.device
                     )
-                    pred = self.model(x_in)
+                    try:
+                        pred = self.model(x_in)
+                    except (NotImplementedError, RuntimeError) as dev_err:
+                        if str(self.device) != "cpu":
+                            print(f"ℹ Switching PhysFormerX 3D-CNN to CPU ({dev_err})")
+                            self.device = torch.device("cpu")
+                            self.model = self.model.to(self.device)
+                            x_in = x_in.to(self.device)
+                            pred = self.model(x_in)
+                        else:
+                            raise
                     ppg_signal = pred.squeeze().float().cpu().numpy()
 
                 raw_bpm, raw_rpm, qual, freqs, psd = analyze_ppg_spectrum(
@@ -448,7 +457,7 @@ class AsyncPhysFormerEngine:
                 if qual < 0.28:
                     pos_bpm = pos_chrominance_bpm(frames_norm, fps=actual_fps)
                     if 45.0 <= pos_bpm <= 160.0 and (raw_bpm < 45.0 or abs(raw_bpm - pos_bpm) > 25.0):
-                        raw_bpm = 0.65 * raw_bpm + 0.35 * pos_bpm
+                        raw_bpm = 0.65 * raw_bpm + 0.35 * pos_bpm if raw_bpm >= 45.0 else pos_bpm
 
                 infer_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -510,7 +519,6 @@ def draw_vitals_panel(
     cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
     cv2.rectangle(frame, (12, 12), (355, 195), (75, 85, 95), 1)
 
-    # Header bar
     cv2.putText(
         frame,
         "VITALEYE  |  PhysFormerX + YOLOv8",
@@ -524,12 +532,10 @@ def draw_vitals_panel(
     cv2.line(frame, (22, 42), (345, 42), (55, 60, 68), 1)
 
     if bpm > 0 and buf_fill >= WARMUP_LEN:
-        # Animated pulsing indicator
         pulse_phase = (math.sin(time.time() * (bpm / 60.0) * 2.0 * math.pi) + 1.0) * 0.5
         radius = int(7 + 3 * pulse_phase)
         cv2.circle(frame, (36, 76), radius, (50, 50, 240), -1, cv2.LINE_AA)
 
-        # Primary BPM readout
         bpm_color = (60, 235, 100) if 50 <= bpm <= 110 else (40, 180, 255)
         cv2.putText(
             frame,
@@ -551,7 +557,7 @@ def draw_vitals_panel(
             1,
             cv2.LINE_AA,
         )
-        mode_tag = "10s Lock" if buf_fill >= BUFFER_LEN else f"Warmup ({buf_fill}/{BUFFER_LEN})"
+        mode_tag = "10s Lock" if buf_fill >= BUFFER_LEN else f"Tracking ({buf_fill}/{BUFFER_LEN})"
         cv2.putText(
             frame,
             mode_tag,
@@ -563,7 +569,6 @@ def draw_vitals_panel(
             cv2.LINE_AA,
         )
 
-        # Secondary Vitals: Respiratory Rate (BrPM) & HRV (SDNN ms)
         rr_str = f"RR: {rpm:.1f} BrPM" if rpm > 0 else "RR: -- BrPM"
         hrv_str = f"HRV: {hrv_ms:.0f} ms" if hrv_ms > 0 else "HRV: -- ms"
         cv2.putText(
@@ -587,7 +592,6 @@ def draw_vitals_panel(
             cv2.LINE_AA,
         )
 
-        # Signal Quality Bar
         bar_w = int(315 * np.clip(quality, 0.0, 1.0))
         cv2.rectangle(frame, (24, 142), (339, 156), (42, 45, 50), -1)
         bar_col = (
@@ -609,14 +613,14 @@ def draw_vitals_panel(
             cv2.LINE_AA,
         )
     else:
-        # Calibration progress (targets WARMUP_LEN for first reading)
         pct = min(100, int(100 * buf_fill / max(1, WARMUP_LEN)))
+        status_title = "Computing Initial HR..." if buf_fill >= WARMUP_LEN else "Calibrating rPPG Buffer..."
         cv2.putText(
             frame,
-            "Calibrating rPPG Buffer...",
+            status_title,
             (24, 75),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.68,
+            0.66,
             (35, 180, 255),
             2,
             cv2.LINE_AA,
@@ -636,7 +640,7 @@ def draw_vitals_panel(
         )
         cv2.putText(
             frame,
-            "Keep face steady in front of camera (~5 s)",
+            "Keep face steady in front of camera (~4 s)",
             (24, 168),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.40,
@@ -647,7 +651,7 @@ def draw_vitals_panel(
 
 
 def draw_skin_mask_inset(frame: np.ndarray, face_masked_rgb: np.ndarray):
-    """Draws the live YCbCr skin-segmented ROI preview in the top-right corner."""
+    """Draws the live Hybrid Skin-Segmented ROI preview in the top-right corner."""
     if face_masked_rgb is None or face_masked_rgb.size == 0:
         return
     h, w = frame.shape[:2]
@@ -661,7 +665,7 @@ def draw_skin_mask_inset(frame: np.ndarray, face_masked_rgb: np.ndarray):
     cv2.rectangle(frame, (x0 - 2, y0 - 2), (x0 + inset_sz + 2, y0 + inset_sz + 22), (80, 90, 100), 1)
     cv2.putText(
         frame,
-        "YCbCr Skin ROI",
+        "Hybrid Skin ROI",
         (x0 + 4, y0 + inset_sz + 15),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.35,
@@ -678,7 +682,7 @@ def draw_ppg_and_spectrum(
     psd: np.ndarray,
     bpm: float,
 ):
-    """Draws the real-time rPPG waveform and FFT power spectrum at bottom-right."""
+    """Draws the real-time rPPG waveform at bottom-right."""
     if len(ppg_buf) < 4:
         return
 
@@ -703,7 +707,6 @@ def draw_ppg_and_spectrum(
         cv2.LINE_AA,
     )
 
-    # Grid lines
     for frac in (0.25, 0.5, 0.75):
         gy = y0 + int(ph * frac)
         cv2.line(frame, (x0, gy), (x0 + pw, gy), (36, 40, 46), 1)
@@ -786,11 +789,6 @@ def draw_roi_boxes(
 #  SELF-TEST / VERIFICATION ROUTINE
 # ─────────────────────────────────────────────────────────────────────────────
 def run_self_test(args) -> int:
-    """
-    Runs an automated end-to-end verification of YOLOv8, PhysFormerX weights,
-    preprocessing, BPM/RR/HRV extraction, and HUD rendering without requiring
-    interactive keyboard input.
-    """
     print("═" * 65)
     print("  VitalEye — End-to-End Self-Test & Model Verification")
     print("═" * 65)
@@ -818,7 +816,6 @@ def run_self_test(args) -> int:
     yolo = YOLO(args.yolo_weights)
     print(f"✔ YOLOv8 Loaded        : {args.yolo_weights} (classes: {yolo.names})")
 
-    # Synthesize 300 frames (10s @ 30fps) with 75.0 BPM cardiac pulse + 15.0 BrPM respiration
     fps = 30.0
     T = 300
     t = np.arange(T) / fps
@@ -856,7 +853,6 @@ def run_self_test(args) -> int:
     print(f"✔ Target vs Predicted  : Target={target_bpm:.1f} BPM | Predicted={bpm:.2f} BPM (Error={abs(bpm - target_bpm):.2f} BPM)")
     print(f"✔ Signal Metrics       : RR={rpm:.1f} BrPM | HRV={hrv_ms:.1f} ms | Quality={qual * 100:.1f}%")
 
-    # Render a sample HUD preview frame
     canvas = np.full((480, 640, 3), 35, dtype=np.uint8)
     tracker = ROITracker(fps=30.0)
     tracker.update(0, [210, 90, 430, 360], 10.0)
@@ -884,12 +880,12 @@ def run(args):
     if args.self_test:
         sys.exit(run_self_test(args))
 
-    device = torch.device(
+    hw_device = torch.device(
         "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     )
-    print(f"⚙  Device : {device}")
+    print(f"⚙  Device : {hw_device}")
 
-    # ── 1. Load PhysFormerX Model ────────────────────────────────────────────
+    # ── 1. Load PhysFormerX Model + Verify 3D Ops on Selected Device ─────────
     model_path = args.model_weights
     if not os.path.exists(model_path) and os.path.exists(FALLBACK_MODEL):
         model_path = FALLBACK_MODEL
@@ -899,14 +895,24 @@ def run(args):
         print(f"❌ PhysFormerX weights not found at: {model_path}")
         sys.exit(1)
 
-    model = PhysFormerX(seq_len=BUFFER_LEN).to(device)
-    state = torch.load(model_path, map_location=device, weights_only=True)
+    phys_device = hw_device
+    model = PhysFormerX(seq_len=BUFFER_LEN).to(phys_device)
+    state = torch.load(model_path, map_location=phys_device, weights_only=True)
     if any(k.startswith("module.") for k in state):
         state = {k.replace("module.", ""): v for k, v in state.items()}
     model.load_state_dict(state)
     model.eval()
+
+    try:
+        with torch.no_grad():
+            _ = model(torch.zeros(1, 6, 16, IMG_SIZE, IMG_SIZE, device=phys_device))
+    except Exception as mps_err:
+        print(f"ℹ  MPS 3D op fallback ({mps_err}); running PhysFormerX on CPU.")
+        phys_device = torch.device("cpu")
+        model = model.to(phys_device)
+
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"✔  PhysFormerX loaded  ({n_params / 1e6:.2f}M params)")
+    print(f"✔  PhysFormerX loaded  ({n_params / 1e6:.2f}M params on {phys_device})")
 
     # ── 2. Load YOLOv8 Multi-ROI Detector ────────────────────────────────────
     use_yolo = False
@@ -949,11 +955,12 @@ def run(args):
 
     # ── 4. Initialize Trackers, Buffers & Async Inference Engine ─────────────
     tracker = ROITracker(fps=nominal_fps, alpha=BOX_EMA_ALPHA)
-    engine = AsyncPhysFormerEngine(model=model, device=device)
+    engine = AsyncPhysFormerEngine(model=model, device=phys_device)
 
     frame_buf = deque(maxlen=BUFFER_LEN)
     ts_buf = deque(maxlen=BUFFER_LEN)
     last_skin_preview = None
+    prev_mask_float = None
 
     frame_count = 0
     last_submit_frame = 0
@@ -982,7 +989,7 @@ def run(args):
 
     fps_timer = time.perf_counter()
     fps_display = nominal_fps
-    yolo_device = "mps" if str(device) == "mps" else "0" if device.type == "cuda" else "cpu"
+    yolo_device = "mps" if str(hw_device) == "mps" else "0" if hw_device.type == "cuda" else "cpu"
 
     try:
         while True:
@@ -1015,7 +1022,6 @@ def run(args):
                     confs = results.boxes.conf.cpu().numpy()
                     classes = results.boxes.cls.cpu().numpy().astype(int)
 
-                    # Pick highest-confidence box per class (0: Face, 1: Nose, 2: Chest)
                     best_per_cls = {}
                     for box_raw, cf, cls_id in zip(boxes_xyxy, confs, classes):
                         if cls_id in CLASS_NAMES:
@@ -1038,7 +1044,7 @@ def run(args):
                     x, y, w_, h_ = faces[0]
                     tracker.update(0, [float(x), float(y), float(x + w_), float(y + h_)], now_ts)
 
-            # ── Step 2: Crop Stabilized Face ROI, Apply 128×128 YCbCr Skin Mask ──
+            # ── Step 2: Crop Stabilized Face ROI & Apply Hybrid 468-Landmark + YCrCb/LAB Mask ──
             face_box = tracker.get(0, now_ts)
             if face_box is not None:
                 x1, y1, x2, y2 = map(int, face_box)
@@ -1047,13 +1053,18 @@ def run(args):
 
                 if x2 > x1 + 10 and y2 > y1 + 10:
                     face_crop = frame[y1:y2, x1:x2]
-                    # Resize to 128×128 first (matches preprocessor.py FACE_SIZE = 128)
                     face_128 = cv2.resize(face_crop, (FACE_CROP_SIZE, FACE_CROP_SIZE))
                     face_rgb = cv2.cvtColor(face_128, cv2.COLOR_BGR2RGB)
 
-                    # Apply YCbCr skin mask
-                    mask = skin_mask_ycrcb(face_rgb)
-                    mask_3ch = np.stack([mask, mask, mask], axis=-1) // 255
+                    raw_mask = skin_mask_ycrcb(face_rgb)
+                    # Temporal EMA hysteresis on binary mask to prevent edge flicker in diff[t]
+                    mask_f = raw_mask.astype(np.float32) / 255.0
+                    if prev_mask_float is None or prev_mask_float.shape != mask_f.shape:
+                        prev_mask_float = mask_f
+                    else:
+                        prev_mask_float = 0.65 * prev_mask_float + 0.35 * mask_f
+                    stable_mask = (prev_mask_float >= 0.45).astype(np.uint8)
+                    mask_3ch = np.stack([stable_mask, stable_mask, stable_mask], axis=-1)
                     face_masked = face_rgb * mask_3ch
 
                     frame_buf.append(face_masked)
@@ -1063,12 +1074,10 @@ def run(args):
             # ── Step 3: Trigger Non-Blocking PhysFormerX Inference ──
             buf_fill = len(frame_buf)
             if buf_fill >= WARMUP_LEN and (frame_count - last_submit_frame) >= args.slide_step:
-                # Submit latest window (up to 300 frames) to background worker
                 submitted = engine.submit(list(frame_buf), list(ts_buf))
                 if submitted:
                     last_submit_frame = frame_count
                 elif args.video:
-                    # For offline video file mode, wait briefly so every window is processed
                     while engine.busy:
                         time.sleep(0.01)
                     if engine.submit(list(frame_buf), list(ts_buf)):
@@ -1097,7 +1106,6 @@ def run(args):
                 draw_skin_mask_inset(frame, last_skin_preview)
             draw_ppg_and_spectrum(frame, ppg_list, psd_freqs, psd_power, cur_bpm)
 
-            # Bottom status bar
             now_perf = time.perf_counter()
             inst_fps = 1.0 / max(now_perf - fps_timer, 1e-6)
             fps_display = 0.90 * fps_display + 0.10 * inst_fps
@@ -1135,6 +1143,7 @@ def run(args):
                 elif key == ord("r"):
                     frame_buf.clear()
                     ts_buf.clear()
+                    prev_mask_float = None
                     tracker.reset()
                     engine.reset()
                     print("🔄  Buffers & trackers reset — recalibrating...")
@@ -1223,8 +1232,8 @@ def parse_args():
     p.add_argument(
         "--slide_step",
         type=int,
-        default=15,
-        help="Trigger PhysFormerX update every N new frames (default: 15 ≈ 0.5s)",
+        default=10,
+        help="Trigger PhysFormerX update every N new frames (default: 10)",
     )
     p.add_argument(
         "--headless",
