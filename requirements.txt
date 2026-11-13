@@ -1,4 +1,4 @@
-# VitalEye v2 - tested with Python 3.13, CUDA 12.4, RTX 3070 Ti Laptop
+# OptiPulse - tested with Python 3.13, CUDA 12.4, RTX 3070 Ti Laptop
 torch>=2.4          # install the CUDA build: pip install torch --index-url https://download.pytorch.org/whl/cu124
 numpy>=2.0
 scipy>=1.13

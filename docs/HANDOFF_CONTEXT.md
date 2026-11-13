@@ -1,18 +1,18 @@
-# VitalEye – complete handoff context for the next Claude session
+# OptiPulse – complete handoff context for the next Claude session
 
 > **For the next Claude session:** read this whole file before doing anything. It summarises the
 > previous long working session (2026-11-12 → 2026-11-13, Windows PC). The user is now continuing on a
-> **Mac** with the repo cloned from GitHub. Paths written as `E:\CS776 Project\...` are on the Windows PC.
-> On the Mac the repo root is wherever it was cloned (e.g. `~/CS776-Project`), and the **dataset and the
+> **Mac** with the repo cloned from GitHub. Paths written as `E:\HeartRate\...` are on the Windows PC.
+> On the Mac the repo root is wherever it was cloned, and the **dataset and the
 > raw test recordings are NOT there** (see §15).
 
 ---
 
 ## 0. TL;DR – where things stand
 
-* **Project:** CS776 course project "VitalEye", contactless heart rate (rPPG) from a webcam/phone camera.
+* **Project:** university course project "OptiPulse", contactless heart rate (rPPG) from a webcam/phone camera.
   The user wants it very accurate (~1 BPM MAE), robust to low light and motion, and the basis of a paper.
-* **Built:** a new library `vitaleye/` with:
+* **Built:** a new library `optipulse/` with:
   * two 3D-CNN models: **Pix** (VitalNet v1) and **MRC** (VitalNet v4, region branch + noise-gated fusion
     + cross-illumination consistency);
   * a 10-model ensemble with spectral fusion;
@@ -38,8 +38,8 @@
   * **Still unknown:** whether the weak signal comes from the camera pipeline (DroidCam compression,
     phone ISP), the distance (face too close), the user's skin tone, or model domain shift. **No
     reference (cardio machine) readings have been received yet.**
-* **Current step:** the user is testing on a **Mac (8 GB RAM)** with `dist/VitalEye_mac.zip` /
-  `mac/run_mac.sh`.
+* **Current step:** the user is testing on a **Mac (8 GB RAM)** with `dist/OptiPulse_mac.zip` /
+  `launchers/macos/run_mac.sh`.
   * The first Mac run failed: `Cannot convert a MPS Tensor to float64`. **Fixed** (frames cast to float32;
     the startup MPS check now runs the whole engine), but **not yet re-tested on the Mac**.
   * The user starts a **new chat on the Mac** with this file as context.
@@ -63,7 +63,7 @@
   English; short Hindi phrases are fine.
 * Wishes and constraints they stated:
   * "Don't do any faaltu [useless] things, stay on the line", and at the end give a report of what was
-    downloaded, created and how much memory/disk was used (this is kept in `reports/WORK_REPORT.md`).
+    downloaded, created and how much memory/disk was used (this is kept in `docs/WORK_REPORT.md`).
   * Wants MAE ≈ 1 or lower; asked for "0" (explained: impossible, the reference itself is ±1 BPM).
   * **No hardcoding toward ~70 BPM, no overfitting.** They will verify live against a cardio/HR machine
     and expect e.g. ~120 after exercise to be read correctly.
@@ -93,7 +93,7 @@
 PC lessons:
 * Run **one GPU job at a time**: two or three in parallel thrashed VRAM (7.8 GB) and were killed.
 * PowerShell `*>` writes UTF-16 logs that grep can't read; use the JSON outputs.
-* `scripts/live_monitor.py` has a **UTF-8 BOM**: read and write it with `encoding="utf-8-sig"`.
+* The app used to be `scripts/live_monitor.py` with a UTF-8 BOM; it is now `optipulse/app.py` without one.
 
 ---
 
@@ -105,11 +105,11 @@ PC lessons:
   publish frames of sub27.
 * The videos are heavily compressed MPEG-4 (~0.8 Mbit/s), which is why classical POS reaches only ~20 BPM
   MAE.
-* Preprocessed cache: `data/processed/ubfc_v2/*.npz` (1.9 GB), built by `scripts/preprocess_ubfc.py`:
+* Preprocessed cache: `data/processed/ubfc_v2/*.npz` (1.9 GB), built by `pipeline/preprocess_ubfc.py`:
   * YOLO face box 1.6× enlarged → 80×80 RGB crops, timestamps de-jittered, resampled to 30 Hz;
   * contact PPG aligned to the frames;
   * a face was found in 100 % of frames.
-* **Audit** (`scripts/audit_dataset.py` → `reports/dataset_audit.json`): unreliable references in
+* **Audit** (`pipeline/audit_dataset.py` → `results/metrics/dataset_audit.json`): unreliable references in
   **sub3, sub4, sub11, sub14, sub18, sub20, sub24**:
   * sub11/18/20/24: oximeter HR dropouts (their PPG waveform turned out usable);
   * sub3/4/14: noisy PPG.
@@ -121,18 +121,16 @@ PC lessons:
 
 ---
 
-## 4. Repository layout (after reorganisation)
+## 4. Repository layout (after the 2026-11-14 restructure)
 
 ```text
-CS776 Project/
-├── run_vitaleye.bat        live app, laptop webcam (passes extra args through)
-├── run_phone.bat           phone via DroidCam: --camera 1 --backend msmf --cam_fps 60 --save_raw auto
-├── run_phone_wifi.bat      phone stream URL directly (http://<phone-ip>:4747/video), no DroidCam PC client
-├── find_cameras.bat        lists working cameras and flags flat "no picture" feeds
-├── train_pipeline.bat      full reproduction: preprocess → audit → train pix → train mrc → eval → report (~5 h)
-├── requirements.txt, README.md, .gitignore
-├── vitaleye/               library (single source of truth for training AND the live app)
+HeartRate/                  (on the PC: rename the old course-named folder on `E:\` to `HeartRate` so the paths here match)
+├── README.md, requirements.txt, .gitignore, .gitattributes (.bat = CRLF, .sh = LF)
+├── optipulse/               THE SYSTEM: library + live app (single source of truth for training AND live)
 │   ├── __init__.py         constants: TARGET_FPS 30, CROP_SIZE 80, INPUT_SIZE 72, BOX_SCALE 1.6, band 0.65–3.2 Hz (39–192 BPM)
+│   ├── __main__.py         `python -m optipulse` → app.cli()
+│   ├── app.py              THE APP (webcam / phone / URL / video file / --ubfc scoring); was scripts/live_monitor.py
+│   ├── paths.py            every path constant (MODELS_DIR, RESULTS_DIR, METRICS_DIR, OUTPUTS_DIR, DATA_DIR, LEGACY_SYSTEM_DIR, TRIAL_MODELS_DIR, …)
 │   ├── dsp.py              detrend, bandpass, spectrum, hr_from_signal (HR + SNR), hr_from_waves, resample_uniform, POS/CHROM/GREEN
 │   ├── ubfc.py             UBFC readers, timestamps, GT interpolation, audit flags
 │   ├── face.py             FaceDetector (YOLOv8 face/nose/chest, Haar fallback, MPS→CPU fallback), BoxSmoother, crop_square (returns RGB)
@@ -143,27 +141,44 @@ CS776 Project/
 │   ├── tracking.py         HRTracker (causal HMM), band_psd, BPM_GRID
 │   ├── live.py             load_ensemble (alternates families), bin_average, HREngine (engine, lock/slew, honesty gate)
 │   └── ui.py               LiveUI (camera view + side panel)
-├── scripts/
+├── models/
+│   ├── vitalnet/pix_fold0-4.pt, mrc_fold0-4.pt   deployed ensemble (~2.5 MB each; versioned in git)
+│   └── face_detector/yolov8_face_nose_chest.pt   52 MB YOLOv8 (classes: face=0, nose, chest)
+├── launchers/
+│   ├── windows/            run_optipulse.bat (webcam), run_phone.bat (DroidCam: --camera 1 --backend msmf --cam_fps 60 --save_raw auto),
+│   │                       run_phone_wifi.bat (http://<phone-ip>:4747/video), find_cameras.bat (flags flat "no picture" feeds),
+│   │                       train_pipeline.bat (preprocess → audit → train pix → train mrc → eval → report, ~5 h).
+│   │                       Each does `cd /d "%~dp0..\.."` first, then `python -m optipulse …` / `python pipeline\….py`.
+│   └── macos/run_mac.sh    creates .venv, runs the app (finds the repo root by itself)
+├── pipeline/               offline research pipeline (was scripts/)
 │   ├── preprocess_ubfc.py, audit_dataset.py
 │   ├── train_cv.py         5-fold subject-wise CV (--version, --pair_w, --prefix, --only_fold …)
 │   ├── eval_tracking.py    CV eval of model sets with/without tracking; --never_trained
 │   ├── compare_pipelines.py  full live pipeline vs legacy monitor on all 50 raw videos
-│   ├── ensemble_check.py, ensemble_check5.py   earlier studies
-│   ├── make_report.py      → reports/RESULTS.md + figures
-│   └── live_monitor.py     THE APP (webcam / phone / URL / video file / --ubfc scoring)
-├── models/
-│   ├── vitalnet/pix_fold0-4.pt, mrc_fold0-4.pt   deployed ensemble (~2.5 MB each; versioned in git)
-│   └── face_detector/yolov8_face_nose_chest.pt   52 MB YOLOv8 (classes: face=0, nose, chest)
-├── mac/run_mac.sh, mac/README_MAC.md            Mac test kit sources
-├── dist/VitalEye_mac.zip   built Mac kit (git-ignored; rebuild from mac/ + vitaleye + scripts + models)
-├── docs/METHOD.md          paper-style method write-up; this file (HANDOFF_CONTEXT.md); old notes
-├── reports/                RESULTS.md, WORK_REPORT.md (sections 1–12 = full log), cv_results_*.json, tracking_*.json, pipeline_comparison*.json, figures/
-├── outputs/                live logs hr_log_*.csv, raw_*.mkv recordings (git-ignored), pipeline_eval/
-├── artifacts/trial_models/ every experiment's checkpoints (pix = run 1, mrc, run2_partial, v3_dev, v4_dev); git-ignored *.pt
-├── artifacts/legacy_code/  old PhysFormerX / VitalEyePro / Gradio deploy (still runnable)
-├── data/                   raw, processed, legacy (git-ignored, 31 GB)
-└── other_projects/rideflow unrelated Node.js app that had been in the folder (moved, untouched)
+│   └── make_report.py      results/metrics/*.json → results/RESULTS.md + results/figures/
+├── results/                RESULTS.md, figures/, metrics/ (cv_results_*.json, tracking_*.json, pipeline_comparison*.json, dataset_audit.json, …)
+├── docs/                   EXPLAIN.md (newcomer guide + Q&A), METHOD.md, WORK_REPORT.md (sections 1–14 = full log), MAC_GUIDE.md, this file
+├── archive/                NOT used by the current system (see archive/README.md)
+│   ├── legacy_system/      old PhysFormerX / VitalEyePro code (was artifacts/legacy_code/); deploy/ = old Gradio app
+│   │                       (was *_Deploy/, old weights in deploy/models/); docs/ = old-system docs and figures
+│   ├── experiments/        ensemble_check.py, ensemble_check5.py
+│   └── trial_models/       every experiment's checkpoints (pix = run 1, mrc, run2_partial, v3_dev, v4_dev); git-ignored, PC only
+├── outputs/                live logs hr_log_*.csv, raw_*.mkv recordings, pipeline_eval/ (git-ignored)
+├── data/                   raw, processed, legacy (git-ignored, 31 GB, PC only)
+└── dist/OptiPulse_mac.zip   built Mac kit (git-ignored; outdated layout, rebuild if needed: optipulse/ + models/ + run_mac.sh + docs/MAC_GUIDE.md)
 ```
+
+> **Restructure of 2026-11-14 (on the Mac).** Old → new: `*.bat` → `launchers/windows/`; `mac/run_mac.sh` →
+> `launchers/macos/`; `mac/README_MAC.md` → `docs/MAC_GUIDE.md`; `scripts/live_monitor.py` → `optipulse/app.py`
+> (run as `python -m optipulse`; the UTF-8 BOM was dropped); other `scripts/*.py` → `pipeline/`;
+> `scripts/ensemble_check*.py` → `archive/experiments/`; `reports/RESULTS.md` + `figures/` → `results/`;
+> `reports/*.json` → `results/metrics/`; `reports/WORK_REPORT.md` → `docs/`; `artifacts/legacy_code/` →
+> `archive/legacy_system/`; `*_Deploy/` → `archive/legacy_system/deploy/`; old-system docs in
+> `docs/` → `archive/legacy_system/docs/`. Sections below that describe past sessions keep the old names.
+> **On the PC after pulling:** move `artifacts/trial_models/` → `archive/trial_models/` and the root
+> `*_Deploy/models/{vidformer.pt,yolov8/}` → `archive/legacy_system/deploy/models/` (both
+> git-ignored, so git doesn't move them), then delete the empty `artifacts/`, `scripts/`, `mac/`,
+> `reports/`, `*_Deploy/` folders. `data/` and `outputs/` stay where they are.
 
 ---
 
@@ -202,7 +217,7 @@ style.
   * colour cast, side light, illumination drift / exposure steps;
   * motion and jumps;
   * 10–25 fps capture re-interpolated to 30 Hz;
-* folds are fixed (stored in `reports/cv_results_pix.json["folds"]`);
+* folds are fixed (stored in `results/metrics/cv_results_pix.json["folds"]`);
 * run times: Pix 96 min, MRC 87 min; peak VRAM 3.3–3.4 GB.
 
 **Ensemble + tracking (live and eval):**
@@ -227,7 +242,7 @@ style.
 
 ## 6. Results (all on UBFC; MAE in BPM, 10-s windows, 43 reliable subjects)
 
-5-fold CV (`reports/RESULTS.md`, `reports/tracking_*.json`):
+5-fold CV (`results/RESULTS.md`, `results/metrics/tracking_*.json`):
 
 | Method | Normal | Low light | Motion | LL+motion | 12 fps |
 |---|---|---|---|---|---|
@@ -256,7 +271,7 @@ style.
 * Fold-0 low-light diagnosis: dark only 1.59; noise only 2.51; both 8.78. Low-light errors are random
   non-harmonic noise peaks (38 % of windows have error > 10).
 
-**Live app end-to-end** (`scripts/compare_pipelines.py`: face detector → engine → display, frame by frame
+**Live app end-to-end** (`pipeline/compare_pipelines.py`: face detector → engine → display, frame by frame
 on the raw videos, held-out fold models, ensemble of 2):
 
 | Engine version | MAE (43 reliable) | RMSE | Within 5 BPM | All 50 |
@@ -270,13 +285,13 @@ on the raw videos, held-out fold models, ensemble of 2):
 * First reading after a median of 6.5 s.
 * Worst subjects: sub37 10.8 (weak pulse, low HR), ds1_6gt 8.2 (0.86 in another run).
 * Quick regression commands used after every change:
-  * `python scripts/live_monitor.py --ubfc sub42 --weights models/vitalnet/pix_fold0.pt models/vitalnet/mrc_fold0.pt --headless`
+  * `python -m optipulse --ubfc sub42 --weights models/vitalnet/pix_fold0.pt models/vitalnet/mrc_fold0.pt --headless`
     must give **MAE 0.64**;
   * sub37 with fold-4 models must give **2.22** (shown 1.17, 53 % shown).
 
 ---
 
-## 7. The live app (`scripts/live_monitor.py` + `vitaleye/live.py` + `vitaleye/ui.py`)
+## 7. The live app (`optipulse/app.py` + `optipulse/live.py` + `optipulse/ui.py`)
 
 **Pipeline per frame:**
 * `Camera` thread (real per-frame timestamps, queue **45 frames** so stalls are caught up, not dropped);
@@ -399,15 +414,15 @@ on the raw videos, held-out fold models, ensemble of 2):
        * the true HR is unknown (no reference readings given);
      * share of exactly unchanged skin pixels frame-to-frame: ≈ UBFC (both compressed), so not conclusive.
    * Changes: measured hints; `--always_show`; duplicate skip.
-6. **Mac kit** (`dist/VitalEye_mac.zip`, 71 MB):
+6. **Mac kit** (`dist/OptiPulse_mac.zip`, 71 MB):
    * `run_mac.sh` creates `.venv`:
      * arm64: latest torch, numpy, scipy, opencv-python, pillow, ultralytics;
      * Intel: torch 2.2.2 + torchvision 0.17.2 + numpy<2, Python ≤ 3.12;
    * exports `PYTORCH_ENABLE_MPS_FALLBACK=1` and runs
-     `live_monitor.py --camera 0 --ensemble 2 --always_show --save_raw auto`;
+     `python -m optipulse --camera 0 --ensemble 2 --always_show --save_raw auto`;
    * measured RAM ≈ 1.1 GB (CPU, 2 models + YOLO);
    * **first Mac run:** every inference failed with "Cannot convert a MPS Tensor to float64". Fixed in
-     `vitaleye/live.py` (float32 cast). The startup check now runs the full HREngine on CPU and MPS and
+     `optipulse/live.py` (float32 cast). The startup check now runs the full HREngine on CPU and MPS and
      compares. A dispatch-mode scan on CUDA found no float64 GPU ops. **Needs a re-test on the Mac.**
 
 ---
@@ -492,14 +507,15 @@ repo; recreate them if needed).
 
 ---
 
-## 12. Mac instructions given to the user (`mac/README_MAC.md`)
+## 12. Mac instructions given to the user (`docs/MAC_GUIDE.md`, was `mac/README_MAC.md`)
 
-* Unzip, then in Terminal: `cd ~/Downloads/VitalEye_mac && bash run_mac.sh`. The first run downloads
+* Unzip, then in Terminal: `cd ~/Downloads/OptiPulse_mac && bash run_mac.sh`. The first run downloads
   ~1.5 GB into `.venv`; Python 3.11/3.12 is needed. Allow Terminal camera access (System Settings →
   Privacy & Security → Camera).
 * **With the repo cloned from GitHub** (what the user is doing now): from the repo root run
-  `bash mac/run_mac.sh`. The script detects whether it's in the zip kit or in `mac/` of a clone, and
-  `cd`s to the folder holding `scripts/`. The `.venv` is then created in the repo root (git-ignored).
+  `bash launchers/macos/run_mac.sh`. The script walks up from its own folder until it finds
+  `optipulse/__main__.py` (works in the zip kit and in a clone), `cd`s there and runs `python -m optipulse`.
+  The `.venv` is created in the repo root (git-ignored).
 * Test protocol:
   * **Mac video effects OFF** (Portrait, Studio Light, Center Stage);
   * 50–70 cm, face ≈ 1/3 of the frame, lamp in front;
@@ -532,7 +548,7 @@ repo; recreate them if needed).
      2. **unsupervised test-time / personal adaptation** (SiNC-style) on the user's unlabeled
         recordings, validated against the reference readings that were *not* used in training;
      3. **multi-dataset training** once MMPD/PURE/UBFC-Phys arrive.
-5. Keep `docs/METHOD.md`, `README.md` and `reports/WORK_REPORT.md` updated (the user wants a complete
+5. Keep `docs/METHOD.md`, `README.md` and `docs/WORK_REPORT.md` updated (the user wants a complete
    report of everything done, downloaded and used).
 6. Optional cleanups:
    * METHOD.md could mention the live lock/slew/gate;
@@ -556,7 +572,7 @@ All of these read a raw recording: `<name>.mkv` + `<name>_timestamps.csv` (colum
 * **bench_loop / bench_prof:** a fake real-time camera serving frames from a recording, monkeypatched into
   `LM.Camera`, with `cv2.imshow`/`waitKey` stubbed. Runs `LM.run` and reports engine fps; it times
   `detect`/`render`/`infer`/`push`/`crop` via wrappers.
-* `find_cameras.bat` / `--list_cameras`.
+* `launchers/windows/find_cameras.bat` / `--list_cameras`.
 
 Notes:
 * The detector returns boxes as `[x1,y1,x2,y2]`; `BoxSmoother` state is `(cx, cy, size)`.
@@ -567,17 +583,17 @@ Notes:
 ## 15. What is and isn't in GitHub
 
 * `.gitignore` was fixed on 2026-11-13.
-  * **In git:** code, docs, reports (JSON/MD/figures), `models/vitalnet/*.pt`,
-    `models/face_detector/*.pt`, `mac/`.
+  * **In git:** code, docs, results (JSON/MD/figures), `models/vitalnet/*.pt`,
+    `models/face_detector/*.pt`, `launchers/`, `archive/` (except its `*.pt`).
   * **Not in git:** `data/` (31 GB, licence), `outputs/*.csv|*.mkv|*.avi|*.png|*.mp4` (user logs and face
-    recordings), `artifacts/**/*.pt` (trial checkpoints), `dist/`, `reports/logs/`, root
+    recordings), `archive/trial_models/` + legacy `*.pt`, `dist/`, `results/logs/`, root
     `Screenshot*.png` / `image*.png` (the user's face), `.cache/`.
 * As of writing, **nothing had been committed or pushed yet.** The user said they'd use GitHub; the
   commands were given to them.
 * Consequence for the Mac session:
   * no dataset → no training, no `--ubfc` scoring, no `compare_pipelines`;
   * the user's PC logs and recordings aren't there either. Key numbers are in this file and in
-    `reports/WORK_REPORT.md` §8–12.
+    `docs/WORK_REPORT.md` §8–12.
 
 ---
 
@@ -600,4 +616,4 @@ Notes:
   | Legacy monitor eval | 98 min |
 
 * Peak VRAM 3.44 GB; RAM ~4 GB per training process; GPU 75–87 °C.
-* Full details: `reports/WORK_REPORT.md`.
+* Full details: `docs/WORK_REPORT.md`.

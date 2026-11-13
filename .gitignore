@@ -2,7 +2,8 @@
 data/
 *.zip
 
-# Model weights / checkpoints: trial checkpoints stay local, the DEPLOYED models are versioned
+# Model weights / checkpoints: trial checkpoints (archive/trial_models/) and the old system's weights
+# (archive/legacy_system/deploy/models/) stay local, the DEPLOYED models are versioned
 # (needed to run the app on another machine: 10 x ~2.5 MB + 52 MB face detector)
 *.pt
 !models/vitalnet/*.pt
@@ -22,7 +23,8 @@ outputs/*.png
 /Screenshot*.png
 /image*.png
 outputs/pipeline_eval/
-reports/logs/
+results/logs/
+archive/trial_models/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
@@ -34,8 +36,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# packaged builds (rebuild from mac/ + models)
+# packaged builds (e.g. the Mac zip kit: optipulse/ + models/ + launchers/macos/run_mac.sh)
 dist/
 
-# local Python environments (e.g. created by mac/run_mac.sh)
+# local Python environments (e.g. created by launchers/macos/run_mac.sh)
 .venv/

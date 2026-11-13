@@ -1,6 +1,6 @@
-# VitalEye: noise-aware remote heart-rate estimation with linear-first region combining, cross-illumination consistency and causal spectral tracking
+# OptiPulse: noise-aware remote heart-rate estimation with linear-first region combining, cross-illumination consistency and causal spectral tracking
 
-*Draft write-up of the method (CS776 project). Results: `reports/RESULTS.md`.*
+*Draft write-up of the method. Results: `results/RESULTS.md`.*
 
 ## Problem
 
@@ -8,7 +8,7 @@ Remote photoplethysmography (rPPG) reads the heart rate from tiny colour changes
 On UBFC-rPPG the pulse is ~0.2-1 % of pixel intensity, and the video is MPEG-4 compressed at ~0.8 Mbit/s.
 Classical methods (GREEN, CHROM, POS) fail on this copy (MAE 15-20 BPM). Deep models do well in good light,
 but they degrade sharply when the face is dark and noisy. Our run-1 baseline gave **1.4 BPM in normal light
-but 10.9 BPM in low light**. The error analysis (`reports/RESULTS.md`, fold-0 diagnosis) showed that:
+but 10.9 BPM in low light**. The error analysis (`results/RESULTS.md`, fold-0 diagnosis) showed that:
 
 * darkening alone (x0.1 + 8-bit quantisation) costs little (1.06 -> 1.59 BPM);
 * sensor noise alone costs little (-> 2.5 BPM);
@@ -21,7 +21,7 @@ but 10.9 BPM in low light**. The error analysis (`reports/RESULTS.md`, fold-0 di
 
 We combine ideas from several lines of work. None of the parts below is copied as-is from one paper.
 
-1. **Linear-first region branch with learned maximal-ratio combining (MRC)** (`vitaleye/model.py: RegionBranch`).
+1. **Linear-first region branch with learned maximal-ratio combining (MRC)** (`optipulse/model.py: RegionBranch`).
    *Inspiration:* DistancePPG (Kumar et al. 2015) combines facial regions with weights equal to their
    SNR (maximal-ratio combining). Multi-region spatio-temporal maps come from RhythmNet (Niu et al. 2020).
    *What we change:* the regions are **soft-skin-weighted**, using the attention mask learned by the pixel
@@ -49,7 +49,7 @@ We combine ideas from several lines of work. None of the parts below is copied a
 4. **Heterogeneous ensemble with spectral fusion.** We ensemble the pixel model (v1) with the
    region-MRC model (v4). They fail in different windows, so averaging their band-normalised power
    spectra (not their waveforms, which can differ in phase) beats either one alone.
-5. **Causal spectral HMM tracking** (`vitaleye/tracking.py`). The state is the HR on a 1-BPM grid over
+5. **Causal spectral HMM tracking** (`optipulse/tracking.py`). The state is the HR on a 1-BPM grid over
    39-192 BPM with a **uniform prior**, so there is no pull towards 70-80 BPM. The only constraint is
    continuity: a Gaussian random walk of 4 BPM/s, which still follows post-exercise recovery. The
    evidence is the sharpened ensemble spectrum with a uniform floor, so the tracker cannot lock forever.
