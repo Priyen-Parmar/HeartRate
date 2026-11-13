@@ -54,6 +54,11 @@
 ## 1. The user and how to work with them
 
 * Git user **Priyen Parmar**, GitHub repo `https://github.com/Priyen-Parmar/HeartRate.git` (branch `main`).
+  * Pushes authenticate as the GitHub account **`Priyen-Parmar`** (Windows Credential Manager).
+  * Commit identity since 2026-11-13: `Priyen Parmar <priyen3105@gmail.com>`. Older commits used a
+    different email.
+  * On the Mac, set the same once: `git config --global user.name "Priyen Parmar"` and
+    `git config --global user.email "priyen3105@gmail.com"`.
 * Writes in English, Hindi and Hinglish (often voice dictation, Devanagari). Answer in clear, simple
   English; short Hindi phrases are fine.
 * Wishes and constraints they stated:
