@@ -1,8 +1,11 @@
 #!/bin/bash
-# VitalEye on macOS. Usage (in Terminal, inside this folder):   bash run_mac.sh
+# VitalEye on macOS. Usage (Terminal):  bash run_mac.sh  (zip kit)   or   bash mac/run_mac.sh  (GitHub clone)
 # First run creates a private Python environment in .venv (~1.5 GB download, 5-10 min). Later runs start
 # in seconds. Extra options are passed to the app, e.g.:  bash run_mac.sh --ensemble 4   |   bash run_mac.sh --list_cameras
 cd "$(dirname "$0")" || exit 1
+# works both from the unzipped kit (scripts/ next to this file) and from a GitHub clone (this file in mac/)
+if [ ! -f scripts/live_monitor.py ] && [ -f ../scripts/live_monitor.py ]; then cd ..; fi
+if [ ! -f scripts/live_monitor.py ]; then echo "scripts/live_monitor.py not found next to run_mac.sh"; exit 1; fi
 
 PY=""
 for c in python3.12 python3.11 python3.13 python3; do

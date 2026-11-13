@@ -37,4 +37,5 @@ Thumbs.db
 # packaged builds (rebuild from mac/ + models)
 dist/
 
-.mkv
+# local Python environments (e.g. created by mac/run_mac.sh)
+.venv/
