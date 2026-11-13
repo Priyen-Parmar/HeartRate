@@ -22,7 +22,12 @@ No dataset is included, and none is needed.
 
 * Sit **50-70 cm** from the Mac. Your face should be about **1/3 of the picture height**: no "Too close"
   hint on screen.
-* Light from the front (lamp or window behind the laptop), not only a ceiling light.
+* **Light is the most important part.** Your face must be the brightest thing in the picture: a lamp or a
+  window **in front of you** (behind the laptop). Avoid a bright wall, window or ceiling light behind or
+  above you: the Mac camera then exposes for the background, your face gets dark, and the camera keeps
+  re-adjusting its brightness. That is 20-30x stronger than the pulse (measured on the first Mac session).
+  The app tells you "Light is behind you" when it measures this.
+* Glasses off if you can (they reflect the screen). Rest your arms and lean back so your head stays still.
 * Turn off macOS **video effects** (Control Centre -> Video Effects: Portrait, Studio Light, Center Stage
   OFF). They change the skin pixels and can erase the pulse.
 * Sit still, don't talk, **2 minutes**. Every ~15 s write down the **reference device reading and the
@@ -31,7 +36,8 @@ No dataset is included, and none is needed.
 * **Optional:** a second run after ~30 squats (heart rate ~110-130).
 
 The number appears ~10 s after your face is found. Amber = low-confidence reading (weak signal); green =
-stable.
+stable. The SIGNAL bars measure how strong the pulse is in the video; only better light and a still head raise
+them (dataset videos: +3 to +4 dB = 4 bars; first Mac session: -2 dB = 1-2 bars).
 
 ## 3. Send back
 

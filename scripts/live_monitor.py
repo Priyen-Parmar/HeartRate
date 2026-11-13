@@ -17,6 +17,7 @@ import time
 import queue
 import argparse
 import threading
+from collections import deque
 from datetime import datetime
 
 import numpy as np
@@ -92,6 +93,61 @@ def list_cameras(max_index=6):
             cap.release()
     if not found:
         print("  no working camera found")
+
+
+class SceneMonitor:
+    """Measures the two capture problems that most often bury the pulse, so the hint can name them:
+      * head movement : range of the face-box centre over the last few seconds, as a fraction of the face
+                        size (Mac session 2026-11-13: still 3-6 %, moving 10-30 %; SNR -0.5..+0.5 dB vs -4 dB)
+      * backlight     : face skin darker than the rest of the picture (bright wall / window / ceiling lamp
+                        behind the person). The camera's auto-exposure then follows the background and the
+                        face is under-exposed and keeps changing brightness."""
+
+    def __init__(self, span_s=4.0):
+        self.span = span_s
+        self.hist = deque()                    # (ts, cx, cy, size)
+        self.motion, self.face_light, self.bg_light = 0.0, 0.0, 0.0
+
+    def reset(self):
+        self.hist.clear(); self.motion = 0.0
+
+    def update_box(self, ts, box):
+        if box is None:
+            self.hist.clear(); return
+        self.hist.append((ts, box[0], box[1], box[2]))
+        while self.hist and ts - self.hist[0][0] > self.span:
+            self.hist.popleft()
+
+    def measure(self, frame, box):
+        if len(self.hist) >= 5:
+            a = np.array(self.hist)
+            self.motion = float(max(np.ptp(a[:, 1]), np.ptp(a[:, 2])) / max(a[:, 3].mean(), 1.0))
+        else:
+            self.motion = 0.0
+        if box is None:
+            return
+        cx, cy, sz = box
+        h, w = frame.shape[:2]
+        # face light: central skin area (cheeks / nose / forehead) of the detector box
+        x0, x1 = int(max(0, cx - sz * 0.25)), int(min(w, cx + sz * 0.25))
+        y0, y1 = int(max(0, cy - sz * 0.25)), int(min(h, cy + sz * 0.20))
+        if x1 > x0 and y1 > y0:
+            self.face_light = float(frame[y0:y1:2, x0:x1:2].mean())
+        # background light: the picture outside the enlarged face box (subsampled, cheap)
+        small = frame[::8, ::8]
+        m = np.ones(small.shape[:2], bool)
+        r = sz * 0.8 / 8
+        m[max(0, int(cy / 8 - r)):int(cy / 8 + r) + 1, max(0, int(cx / 8 - r)):int(cx / 8 + r) + 1] = False
+        if m.any():
+            self.bg_light = float(small[m].mean())
+
+    @property
+    def moving(self):
+        return self.motion > 0.10
+
+    @property
+    def backlit(self):
+        return self.bg_light > 0 and self.face_light < 0.65 * self.bg_light
 
 
 class AsyncFace:
@@ -262,6 +318,12 @@ def run(args):
     if offline:
         cap = cv2.VideoCapture(args.video)
         vfps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        # a recording made with --save_raw has the REAL capture times next to it: replay with those
+        vid_ts = None
+        ts_file = os.path.splitext(args.video)[0] + "_timestamps.csv"
+        if gt is None and os.path.exists(ts_file):
+            vid_ts = np.loadtxt(ts_file, delimiter=",", skiprows=1, ndmin=2)[:, 1]
+            print(f"[vitaleye] replaying with real capture timestamps from {os.path.basename(ts_file)}")
         cam = None
     else:
         cam = Camera(args.camera, fps=getattr(args, "cam_fps", 30), fourcc=getattr(args, "fourcc", "auto"), backend_name=getattr(args, "backend", "auto"))
@@ -273,7 +335,8 @@ def run(args):
     csv_path = args.csv or os.path.join(ROOT, "outputs", f"hr_log_{stamp}.csv")
     fcsv = open(csv_path, "w", newline="")
     wcsv = csv.writer(fcsv)
-    wcsv.writerow(["t_s", "hr_bpm", "raw_hr_bpm", "snr_db", "confidence", "rppg_fps", "shown"] + (["gt_hr_bpm"] if gt else []))
+    wcsv.writerow(["t_s", "hr_bpm", "raw_hr_bpm", "snr_db", "confidence", "rppg_fps", "shown"] + (["gt_hr_bpm"] if gt else [])
+                  + ["snr_avg_db", "head_motion", "face_light", "bg_light"])
 
     # --save_raw: keep the untouched camera frames (+ exact timestamps) so a session can be re-analysed
     # offline (signal diagnosis, other methods, unsupervised adaptation). ~100 MB per minute.
@@ -298,6 +361,7 @@ def run(args):
     last_logged = -1
     async_face = AsyncFace(det, smoother, max_hz=8.0 if dev.type == "mps" else 4.0) if (dev.type != "cuda" and not offline) else None
     fps_cam, t_prev = 0.0, None
+    scene = SceneMonitor()
     box = None
     canvas, last_draw = None, 0.0
     fullscreen = False
@@ -308,7 +372,8 @@ def run(args):
                 ok, frame = cap.read()
                 if not ok:
                     break
-                ts = idx / vfps if gt is None else float(gt["frame_t"][min(idx, len(gt["frame_t"]) - 1)])
+                ts = (float(gt["frame_t"][min(idx, len(gt["frame_t"]) - 1)]) if gt is not None else
+                      float(vid_ts[min(idx, len(vid_ts) - 1)]) if vid_ts is not None else idx / vfps)
             else:
                 item = cam.read()
                 if item is None:
@@ -342,6 +407,7 @@ def run(args):
             prev_small = small.copy()
             if dup:
                 n_dup += 1
+            scene.update_box(ts, box)
             if box is not None:
                 if not dup:
                     eng.push(ts, crop_square(frame, box))
@@ -361,6 +427,8 @@ def run(args):
                         i1 = idx; i0 = max(0, i1 - int(args.window * vfps))
                         g = hr_from_signal(gt["ppg"][i0:i1], vfps)[0]
                         row.append(f"{g:.1f}"); errors.append((abs(eng.hr - g), eng.showing))
+                    scene.measure(frame, box)
+                    row += [f"{eng.snr_avg:.2f}", f"{scene.motion:.3f}", f"{scene.face_light:.0f}", f"{scene.bg_light:.0f}"]
                     wcsv.writerow(row)
 
             # every frame is processed for the pulse; the (heavier) UI is redrawn at most ~20 times/s so a
@@ -369,7 +437,8 @@ def run(args):
             if (not args.headless or args.record) and redraw:
                 last_draw = time.perf_counter()
                 brightness = float(frame[::4, ::4].mean())
-                canvas = ui.render(frame, eng, box, eng.buffered_seconds(), args.min_window, fps_cam, brightness)
+                scene.measure(frame, box)
+                canvas = ui.render(frame, eng, box, eng.buffered_seconds(), args.min_window, fps_cam, brightness, scene)
                 if args.record:
                     if writer is None:
                         writer = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"mp4v"), 30, (canvas.shape[1], canvas.shape[0]))
@@ -380,7 +449,7 @@ def run(args):
                 if k in (ord("q"), 27):
                     break
                 if k == ord("r"):
-                    eng.reset(); smoother.reset(); box = None; print("reset")
+                    eng.reset(); smoother.reset(); scene.reset(); box = None; print("reset")
                     if async_face is not None:
                         async_face.reset()
                 if k == ord("s"):

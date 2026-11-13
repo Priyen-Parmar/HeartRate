@@ -424,6 +424,7 @@ Facts:
   | 15:06 | laptop | −2.5 dB | – |
   | 20:15 | laptop | −3.1 dB | 0 % ≥ 0 dB |
   | 21:44 | phone | −2.7 dB | 15 % |
+  | 2026-11-13 23:44 | Mac M4 FaceTime | −2.1 dB | low conf.; no-pulse wall patch scores the same (see WORK_REPORT §13) |
 
 * The tracker "confidence" only measures self-consistency over time, not whether a pulse is present (it
   was 0.8 at −4 dB). The SNR gate is what tells the two apart.

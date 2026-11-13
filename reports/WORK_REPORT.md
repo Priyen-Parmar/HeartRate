@@ -286,3 +286,50 @@ face detector, `run_mac.sh` and `README_MAC.md`. Source files are in `mac/`.
     CPU and MPS. It previously ran only the model on float32 input, which is why it missed this.
   * A dispatch-level scan of the engine on CUDA (30 and 60 fps paths) found no float64 GPU ops left.
   * Regression: sub42 0.64, sub37 2.22 (shown 1.17); both unchanged. The zip was rebuilt.
+
+## 13. First real Mac session (2026-11-13 23:44, Apple M4, FaceTime camera): diagnosis
+
+User report: "confidence is low and the signal stays at 1-2 bars". Recording: `outputs/raw_20261113_234414.mkv`
+(67 s, 640x480, lossless) + log. **No reference HR readings were taken.**
+
+What was measured (offline, same models/pipeline; scripts lived in the session scratchpad):
+* Device: MPS chosen (passes the CPU check). Speed on M4: ~0.3-0.4 s per model per update -> 2 models
+  0.9 s, 4 models 1.5 s, 10 models 3.4 s.
+* Camera delivery: 1637 frames in 67 s (24 fps of a 30 fps camera, ~19 % lost); arrivals are bursty
+  (45 % of intervals < 20 ms, 137 gaps of 0.1-0.35 s). A timestamp de-jitter was tried: +0.5 dB in one test,
+  -0.45 dB in the full-app replay -> not a measurable gain, **not kept**.
+* Picture: face 139 px (fine), no clipping, but **face skin brightness 80 vs background 163**: bright wall,
+  light from the ceiling, nothing in front of the face. Glasses reflect the screen; a beard covers the lower
+  cheeks, so the usable skin is forehead + upper cheeks + nose.
+* Camera auto-exposure / white balance: the background brightness changes by -11 %..+8 % over the session.
+  The pulse changes skin brightness by ~0.34 %, so exposure changes are 20-30x larger than the pulse.
+  A background-gain correction was tried: it injected background noise (face, wall and shirt then all gave
+  the same fake HR) -> **rejected**.
+* **No-pulse control:** the same networks run on wall and T-shirt patches of the same video give the same
+  per-window SNR (-2.4 dB) as the face (-2.1 dB) and an even higher tracker confidence. **So in this
+  recording, a single 10-s window can't be told apart from a blank wall.** The low-confidence state and
+  1-2 signal bars were therefore correct; showing it as "stable" would have meant showing noise as a
+  reading.
+* There is a weak but real hint of a pulse: averaged over the whole session, all 10 models peak at
+  74-83 BPM (ensemble 79) and classical POS over 60 s also gives 79 BPM. Without a reference this can't
+  be confirmed.
+* Head movement: 18-43 px in 16-46 s; 4-9 px at 50-67 s. The still part was **not** better (SNR -2.8 to
+  -3.1 dB in the replay), so lighting / camera, not movement, is the main cause here.
+
+Code changes (diagnostic / UX only; HR estimation and the honesty gate are unchanged, so the UBFC numbers
+stay valid):
+* `scripts/live_monitor.py`: `SceneMonitor` measures head movement (face-centre range over 4 s / face
+  size; flag > 10 %) and backlight (face skin < 0.65 x background brightness). Both are logged in the CSV
+  (new columns `snr_avg_db, head_motion, face_light, bg_light`) and drive measured hints: "Head is
+  moving..." / "Light is behind you: put a lamp/window in FRONT of your face".
+* `--video <raw_*.mkv>` now replays a `--save_raw` recording with its **real** capture timestamps
+  (`<name>_timestamps.csv`), so a live session can be reproduced offline exactly.
+* `vitaleye/ui.py`: signal bars show the 5-s median SNR (the value the gate uses) instead of the
+  per-window value, so they no longer flicker.
+* Verified: full-app replay of the Mac recording (headless + UI rendering), 102 updates, no errors; the
+  backlight hint fires throughout, and the movement hint fires in the moving segments (61-67 % of updates)
+  and never in the still ones.
+* Not re-run here (no dataset on the Mac): the UBFC regression (sub42 0.64, sub37 2.22). The changed code
+  doesn't touch the HR path, but run it on the PC once.
+
+Disk/memory: nothing downloaded; scratch analysis files only in the session temp folder; no new repo files.

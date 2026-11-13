@@ -152,7 +152,7 @@ class LiveUI:
         pts = np.stack([cx + x * size / 34, cy - y * size / 34], 1).astype(np.int32)
         cv2.fillPoly(img, [pts], color, cv2.LINE_AA)
 
-    def render(self, frame, eng, box, buf_s, min_s, fps_cam, brightness):
+    def render(self, frame, eng, box, buf_s, min_s, fps_cam, brightness, scene=None):
         now = time.perf_counter(); dt = now - self.t_prev; self.t_prev = now
         st = self.state(eng, box, buf_s, min_s)
         view = self._camera(frame, eng, box, st)
@@ -194,13 +194,15 @@ class LiveUI:
             frac = min(1.0, buf_s / max(min_s, 1e-6))
             cv2.line(P, (40, 293), (40 + int((W - 80) * frac), 293), BLUE, 3, cv2.LINE_AA)
 
-        # signal quality bars
+        # signal quality bars: 5-s median SNR (the value the honesty gate uses), so the bars do not
+        # flicker with every 10-s window. Only a better capture raises it (light in front, head still).
         texts.append(((24, 314), "SIGNAL", self.f_label, _rgb(MUTED), "la"))
-        q = 0 if not np.isfinite(eng.snr) else int(np.sum(eng.snr > np.array([-4, -2, 0, 2, 4])))
+        sq = eng.snr_avg if np.isfinite(eng.snr_avg) else eng.snr
+        q = 0 if not np.isfinite(sq) else int(np.sum(sq > np.array([-4, -2, 0, 2, 4])))
         for i in range(5):
             x = 100 + i * 22; hh = 6 + i * 3
             cv2.rectangle(P, (x, 330 - hh), (x + 14, 330), (GREEN if q >= 4 else AMBER if q >= 2 else RED) if i < q else GRID, -1)
-        texts.append(((216, 314), f"{eng.snr:+.1f} dB" if np.isfinite(eng.snr) else "--", self.f_small, _rgb(MUTED), "la"))
+        texts.append(((216, 314), f"{sq:+.1f} dB" if np.isfinite(sq) else "--", self.f_small, _rgb(MUTED), "la"))
 
         # trend chart (last 60 s)
         cx0, cy0, cx1, cy1 = 24, 372, W - 24, 468
@@ -259,6 +261,10 @@ class LiveUI:
             hint = "Too far: move closer to the camera"
         elif fps_cam and fps_cam < 20:
             hint = f"Camera only {fps_cam:.0f} fps"
+        elif scene is not None and scene.moving:
+            hint = "Head is moving: rest your arms, sit back, keep still"
+        elif scene is not None and scene.backlit:
+            hint = "Light is behind you: put a lamp/window in FRONT of your face"
         elif st in ("nopulse", "weak"):
             hint = "Weak pulse: keep head still, don't talk, relax face"
         if hint:
