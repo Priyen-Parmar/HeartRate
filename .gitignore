@@ -1,29 +1,40 @@
-# Large datasets & archives
-Dataset/
-Dataset2/
-Dataset23.zip
+# Data (raw UBFC videos, legacy & new preprocessed caches) - large, licence-restricted
+data/
 *.zip
-preprocessed_vidformer/
-preprocessed_vidformer1/
-preprocessed_vidformer2/
-preprocessed_vidformer*/
 
-# Model checkpoints & weights
+# Model weights / checkpoints: trial checkpoints stay local, the DEPLOYED models are versioned
+# (needed to run the app on another machine: 10 x ~2.5 MB + 52 MB face detector)
 *.pt
+!models/vitalnet/*.pt
+!models/face_detector/*.pt
 
-# Dependencies & caches
-node_modules/
+# Other projects that used to live in this folder
+other_projects/
+
+# Runtime outputs / caches
+.cache/
+outputs/*.csv
+outputs/*.mp4
+outputs/*.mkv
+outputs/*.avi
+outputs/*.png
+# screenshots / photos of people (privacy)
+/Screenshot*.png
+/image*.png
+outputs/pipeline_eval/
+reports/logs/
 __pycache__/
 *.py[cod]
-*$py.class
 .ipynb_checkpoints/
-
-# Local database files & logs
+node_modules/
 *.db
 *.db-shm
 *.db-wal
 *.log
-
-# OS generated files
 .DS_Store
 Thumbs.db
+
+# packaged builds (rebuild from mac/ + models)
+dist/
+
+.mkv

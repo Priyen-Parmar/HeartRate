@@ -1000,7 +1000,9 @@ def run(args):
 
     # ── Open Camera or Video File ────────────────────────────────────────────
     source = args.video if args.video else args.camera
-    cap = cv2.VideoCapture(source)
+    # Use DirectShow backend on Windows to avoid MSMF errors (-1072875772)
+    backend = cv2.CAP_DSHOW if os.name == 'nt' and not args.video else cv2.CAP_ANY
+    cap = cv2.VideoCapture(source, backend)
     if not args.video:
         cap.set(cv2.CAP_PROP_FPS, args.fps)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)

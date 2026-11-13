@@ -1,95 +1,139 @@
-# 🫀 VitalEye — Live Camera Heart Rate, Respiratory Rate & HRV Monitor
+# VitalEye v2 — Contactless Heart Rate from a Webcam (CS776)
 
-Contactless real-time physiological monitoring system (**CS776 Course Project**) that extracts **Heart Rate (BPM)**, **Respiratory Rate (BrPM)**, and **Heart Rate Variability (HRV)** from a live webcam feed using **YOLOv8** multi-ROI tracking and **PhysFormerX v3** (3D-ResNet with Squeeze-and-Excitation channel attention).
+Real-time heart-rate (BPM) estimation from a normal webcam. A YOLOv8 face tracker feeds a
+**10-model ensemble of two complementary rPPG networks**:
+* **VitalNet-Pix**: a 3D-CNN with an appearance-attention pixel path;
+* **VitalNet-MRC**: adds a linear-first, region-wise maximal-ratio-combining branch with noise-gated
+  fusion, trained with cross-illumination consistency.
 
----
+The two are fused in the spectral domain and decoded by a **causal HMM heart-rate tracker** that uses
+no HR prior. Trained on UBFC-rPPG with heavy low-light / motion / heart-rate augmentation. Runs on an
+NVIDIA GPU (tested: RTX 3070 Ti Laptop). Method write-up: **[docs/METHOD.md](docs/METHOD.md)**.
 
-## 📂 Organized Repository Structure
+## Run it
+
+```bat
+run_vitaleye.bat                 :: double-click, webcam 0
+run_vitaleye.bat --camera 1      :: another camera
+```
+
+Sit ~50–80 cm from the camera with your face lit from the front (a lamp or window in front of you,
+not behind). The window shows:
+
+* **left:** the camera. Corner brackets mark the tracked face (blue = measuring, green = stable,
+  amber = weak signal). A warm glow marks the skin the network actually reads the pulse from;
+  press `h` to toggle it.
+* **right:** the panel.
+  * Big BPM, with a heart beating at the measured rate.
+  * A state chip, signal-quality bars, the 60-s heart-rate trend and the live pulse waveform.
+  * Hints when it is too dark or the camera fps is low.
+
+A number appears only once the tracker is confident (usually 8–15 s after you sit down). After that,
+the displayed value changes by at most 3 BPM per second, or ~9 BPM/s when the tracker is very sure.
+A resting heart cannot go from 50 to 120 in one second, but real changes such as exercise recovery are
+followed. If the pulse signal itself is too weak (signal SNR below -1.5 dB, median over 5 s), **no number
+is shown** ("No clear pulse"): a confident-looking wrong number is worse than none. On the dataset videos
+this hides 5 % of readings and lowers the error of the shown ones from 1.59 to 1.17 BPM.
+Keys: `q` quit · `r` reset · `s` screenshot · `f` fullscreen · `h` pulse-region overlay ·
+`c` camera driver settings (Windows: turn off auto-exposure / auto white balance).
+
+Every session writes `outputs/hr_log_<time>.csv` (time, HR, raw HR, signal SNR, tracker confidence, effective fps, `shown` = 1 if the number was displayed),
+so you can line it up second-by-second against a chest strap / pulse oximeter / treadmill reading.
+
+Other modes:
+
+```bat
+python scripts\live_monitor.py --video clip.mp4 --headless --csv out.csv   :: offline file
+python scripts\live_monitor.py --ubfc sub42 --weights models\vitalnet\pix_fold0.pt models\vitalnet\mrc_fold0.pt --headless  :: score vs ground truth (fold-0 models never saw sub42)
+run_vitaleye.bat --no_track      :: plain per-window estimate instead of the tracker
+run_vitaleye.bat --save_raw outputs\me_rest   :: also save the raw camera video losslessly (+ timestamps) for offline diagnosis
+run_vitaleye.bat --fourcc YUY2   :: force a camera stream format (default auto: MJPG for dshow, NV12 for msmf)
+find_cameras.bat                 :: list every camera index / backend that works
+run_phone.bat                    :: phone camera (DroidCam, camera 1 via MSMF) + lossless raw recording
+run_phone.bat --always_show      :: always show the tracked value; weak-signal readings in amber ("Low confidence")
+python scripts\live_monitor.py --cpu --ensemble 2   :: machine without an NVIDIA GPU (~1.8 s per update)
+```
+
+### On a Mac
+
+`dist/VitalEye_mac.zip` (71 MB: code, 10 models, face detector) runs on macOS:
+
+* unzip it and run `bash run_mac.sh`; the first run sets up its own Python environment;
+* it uses the Apple GPU when its results match the CPU, otherwise the CPU;
+* 2 models by default, which suits 8 GB RAM;
+* face detection runs in a background thread.
+
+Instructions: `mac/README_MAC.md`.
+
+## Results (unseen subjects, 5-fold subject-wise cross-validation)
+
+MAE in BPM over 10-s windows, 43 subjects with reliable ground truth. Every subject is scored only by
+models that never saw that person.
+
+| Method | normal | low light | motion | low light + motion | 12 fps webcam |
+|---|---|---|---|---|---|
+| POS (classical) | 20.56 | 25.97 | 29.17 | 27.64 | 22.74 |
+| Old PhysFormerX monitor (normal video) | 6.81 | - | - | - | - |
+| VitalNet-Pix (single model) | 1.42 | 10.91 | 4.06 | 11.47 | 1.50 |
+| **VitalEye full system** | **1.45** | **7.55** | **3.12** | **8.23** | **1.59** |
+| **Live app end-to-end on the raw videos** (face detector -> display) | **1.59** | - | - | - | - |
+
+In normal light, 96 % of windows are within 5 BPM. 0 MAE is not physically reachable: the contact-PPG
+reference itself is only good to about +-1 BPM. Low light remains the hardest case.
+
+See **[reports/RESULTS.md](reports/RESULTS.md)** for all tables and figures and
+**[reports/WORK_REPORT.md](reports/WORK_REPORT.md)** for everything that was done.
+
+## Reproduce from scratch
+
+```bat
+train_pipeline.bat
+```
+= `preprocess_ubfc.py` → `audit_dataset.py` → `train_cv.py` (Pix, then MRC) → `eval_tracking.py`
+(CV system + never-trained check) → `compare_pipelines.py` → `make_report.py`  (~5 h on an RTX 3070 Ti)
+
+## Folder layout
 
 ```text
-HeartRate/
-├── live_hr_monitor.py          # Primary real-time webcam HR, RR & HRV monitor
-├── run_live_hr.sh              # One-command launcher script (uses Python 3.12 + PyTorch)
-├── evaluate_model.py           # Entry-point alias for live_hr_monitor.py
-├── Vidformer1.py               # PhysFormerX v3 training script (HR + RR joint objective)
-├── PhysFormerX.py              # PhysFormerX architecture & training reference
-├── preprocessor.py             # UBFC-rPPG dataset preprocessing pipeline
-├── VitalEye_CS776_Deploy/      # Core inference modules, weights & Gradio web app
-│   ├── physformer.py           # PhysFormerX model definition & spectral helpers
-│   ├── preprocessor.py         # YCbCr skin segmentation & illumination normalization
-│   ├── OneEuroFilter.py        # Jitter-free bounding-box stabilization filter
-│   ├── sliding_pipeline.py     # Offline video file annotation & causal sliding pipeline
-│   ├── pipeline.py             # Multi-ROI video cropping & inference script
-│   ├── app.py                  # Gradio web UI for video uploads
-│   ├── VitalEye_Group_2_CS776_Project_Report.pdf
-│   └── models/
-│       ├── vidformer.pt        # Trained PhysFormerX v3 model weights (1.5M params)
-│       ├── physformer.pt       # Copy of vidformer.pt for deployment scripts
-│       └── yolov8/weights/
-│           └── best.pt         # Trained YOLOv8 weights (Classes: Face, Nose, Chest)
-├── docs/                       # Reference papers, architecture diagrams & training curves
-│   ├── Paper-3.pdf             # Reference paper: RR & HRV estimation from face videos
-│   ├── Pipeline_Explanation.md # Detailed stage-by-stage architecture walkthrough
-│   └── Vidformer_Presentation_Notes.txt
-└── archive/                    # Legacy experimental scripts & Kaggle notebooks
+CS776 Project/
+├── run_vitaleye.bat            one-click live monitor
+├── train_pipeline.bat          rebuild data + retrain + evaluate everything
+├── requirements.txt
+├── vitaleye/                   the library (single source of truth for train AND live)
+│   ├── dsp.py                  detrend / bandpass / HR estimator / POS, CHROM, GREEN
+│   ├── ubfc.py                 UBFC-rPPG readers (video + contact PPG, timestamp handling)
+│   ├── face.py                 YOLOv8 face detector, motion-adaptive box smoother, 1.6x crop
+│   ├── model.py                VitalNet v1 (Pix) / v4 (MRC region branch + noise gate) + losses
+│   ├── tracking.py             causal spectral HMM heart-rate tracker
+│   ├── augment.py              GPU augmentations: low light, noise, motion, HR resampling, fps drop
+│   ├── data.py                 in-memory dataset + GPU batch builder
+│   ├── evaluation.py           window-level metrics + low-light / motion / low-fps stress tests
+│   ├── live.py                 real-time engine (30 Hz resampling, ensemble, spectral fusion, tracking, display lock)
+│   └── ui.py                   live window: camera view + instrument panel
+├── scripts/
+│   ├── preprocess_ubfc.py      raw videos -> data/processed/ubfc_v2/*.npz
+│   ├── audit_dataset.py        ground-truth / label quality audit
+│   ├── train_cv.py             5-fold CV training on the GPU
+│   ├── eval_tracking.py        CV evaluation of model sets with / without tracking
+│   ├── compare_pipelines.py    full live pipeline vs legacy monitor on all videos
+│   ├── make_report.py          reports/RESULTS.md + figures
+│   └── live_monitor.py         webcam / video app
+├── models/
+│   ├── vitalnet/pix_fold0-4.pt deployed ensemble, pixel models (~2.4 MB each)
+│   ├── vitalnet/mrc_fold0-4.pt deployed ensemble, region-MRC models (~2.5 MB each)
+│   └── face_detector/          YOLOv8 Face/Nose/Chest detector
+├── data/
+│   ├── raw/UBFC-rPPG/          50 raw videos + contact-PPG ground truth
+│   ├── processed/ubfc_v2/      new 30 Hz face-crop cache (built by preprocess_ubfc.py)
+│   └── legacy/                 old preprocessed_vidformer* windows, old crops, old zip
+├── reports/                    RESULTS.md, WORK_REPORT.md, dataset audit, CV json, figures, logs
+├── docs/                       METHOD.md (method write-up), old notes, old dataset description
+├── outputs/                    HR logs, screenshots
+├── artifacts/
+│   ├── trial_models/           old checkpoints + every VitalNet experiment (run1, run2, v3, v4, mrc)
+│   └── legacy_code/            old PhysFormerX / VitalEyePro code + old Gradio deploy (still runnable)
+└── other_projects/rideflow/    unrelated Node.js project that was in this folder (moved, untouched)
 ```
 
----
-
-## 🚀 Quick Start — Running the Live Camera Monitor
-
-From the `HeartRate` directory, run:
-
-```bash
-./run_live_hr.sh
-```
-
-Or invoke Python directly:
-
-```bash
-/usr/local/bin/python3.12 live_hr_monitor.py
-```
-
-### Optional Command-Line Arguments
-
-- **Run on a pre-recorded video file**:
-  ```bash
-  ./run_live_hr.sh --video path/to/video.mp4 --record outputs/annotated_demo.mp4
-  ```
-- **Select a different camera index**:
-  ```bash
-  ./run_live_hr.sh --camera 1
-  ```
-- **Run automated self-test verification**:
-  ```bash
-  ./run_live_hr.sh --self_test
-  ```
-
-### Live Window Keyboard Controls
-
-| Key | Action |
-| :--- | :--- |
-| **`q` / `ESC`** | Quit the monitor and print final session vitals |
-| **`r`** | Reset frame buffers and recalibrate |
-| **`m`** | Toggle Multi-ROI bounding boxes (`Face + Nose + Chest` vs. `Face Only`) |
-| **`k`** | Toggle live top-right YCbCr Skin-Mask ROI preview |
-| **`s`** | Save an annotated screenshot to `outputs/` |
-| **`f`** | Toggle fullscreen display |
-
----
-
-## 🧠 End-to-End Live Pipeline Architecture
-
-1. **Multi-ROI YOLOv8 Detection (`best.pt`)**:
-   - Detects `Face` (Class 0), `Nose` (Class 1), and `Chest` (Class 2).
-   - Stabilizes bounding box coordinates across frames using `OneEuroFilter` + Exponential Moving Average (`α = 0.80`) to eliminate motion jitter.
-2. **Training-Matched Spatiotemporal Preprocessing**:
-   - Crops the stabilized `Face` region to `128×128` and isolates skin pixels (forehead and cheeks) in `YCbCr` space (`Cr ∈ [133, 173], Cb ∈ [77, 127]`) with morphological opening/closing.
-   - Removes slow ambient lighting and auto-exposure drift via a **30-frame running-mean subtraction** (`uniform_filter1d`), resizes with antialiasing to `64×64`, and stacks RGB with inter-frame differences (`ΔRGB = Frame[t] - Frame[t-1]`) into a `[1, 6, T, 64, 64]` tensor.
-3. **Asynchronous PhysFormerX 3D-CNN Inference (`vidformer.pt`)**:
-   - Runs in a dedicated background worker thread so the webcam capture loop remains smooth at 30 FPS without dropping frames.
-   - Provides a fast initial lock at **150 frames (~5 seconds)** and transitions into a continuous **300-frame (~10 seconds)** sliding window.
-4. **Spectral & HRV Vital Sign Extraction**:
-   - **Heart Rate (BPM)**: 4096-point Hann-windowed FFT periodogram over `0.75–2.50 Hz` (`45–150 BPM`) using real frame capture timestamps and parabolic peak interpolation, with POS chrominance fallback under low SNR.
-   - **Respiratory Rate (BrPM)**: Extracted simultaneously from the `0.15–0.40 Hz` (`9–24 BrPM`) spectral band.
-   - **HRV (SDNN in ms)**: Computed via zero-phase cardiac bandpass filtering, quadratic peak interpolation, and 3-sigma Gaussian Inter-Beat Interval (IBI) outlier removal.
+Dataset: UBFC-rPPG (Bobbia et al., 2019). Subjects 21 and 27 of Dataset 2 must not appear in
+publications; never publish frames of sub27.
