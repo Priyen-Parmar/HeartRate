@@ -20,7 +20,7 @@ answers to the usual questions.
 HeartRate/
 ├── README.md              you are here
 ├── requirements.txt       Python packages
-├── optipulse/              THE SYSTEM: one Python package (signal processing, networks, tracker, live app)
+├── optipulse/             THE SYSTEM: one Python package (signal processing, networks, tracker, live app)
 ├── models/                trained weights the app loads (10 VitalNet models + YOLO face detector)
 ├── launchers/             one-click starters
 │   ├── windows/           run_optipulse.bat · run_phone.bat · run_phone_wifi.bat · find_cameras.bat · train_pipeline.bat
@@ -28,7 +28,6 @@ HeartRate/
 ├── pipeline/              offline research pipeline: prepare data → train → evaluate → write report
 ├── results/               evidence: RESULTS.md, figures/, metrics/ (raw evaluation JSONs)
 ├── docs/                  reading material (see the table below)
-├── archive/               NOT used by the current system: the old PhysFormerX system, its docs, experiments
 ├── outputs/               created by the app (git-ignored): HR logs, raw recordings, screenshots
 └── data/                  git-ignored: the UBFC-rPPG dataset, only needed for training / evaluation
 ```
@@ -60,7 +59,7 @@ pipeline/               (run in this order by launchers/windows/train_pipeline.b
 ├── audit_dataset.py    ground-truth quality audit -> results/metrics/dataset_audit.json
 ├── train_cv.py         5-fold subject-wise CV training -> models/vitalnet/*.pt + results/metrics/cv_results_*.json
 ├── eval_tracking.py    CV evaluation with / without tracking -> results/metrics/tracking_*.json
-├── compare_pipelines.py  full live app vs the old system on all videos -> results/metrics/pipeline_comparison.json
+├── compare_pipelines.py  full live app evaluation on all videos -> results/metrics/pipeline_comparison.json
 └── make_report.py      results/metrics/*.json -> results/RESULTS.md + results/figures/
 ```
 </details>
@@ -75,7 +74,6 @@ pipeline/               (run in this order by launchers/windows/train_pipeline.b
 | [docs/WORK_REPORT.md](docs/WORK_REPORT.md) | Lab notebook: everything that was tried, what worked, what was rejected and why. |
 | [docs/MAC_GUIDE.md](docs/MAC_GUIDE.md) | Running on a Mac, and how to set up a good test (lighting first). |
 | [docs/HANDOFF_CONTEXT.md](docs/HANDOFF_CONTEXT.md) | Notes for whoever continues the project. |
-| [archive/README.md](archive/README.md) | What the archived old system is and how it relates to the current one. |
 
 ## Run it
 
