@@ -23,7 +23,7 @@ HeartRate/
 ├── optipulse/             THE SYSTEM: one Python package (signal processing, networks, tracker, live app)
 ├── models/                trained weights the app loads (10 VitalNet models + YOLO face detector)
 ├── launchers/             one-click starters
-│   ├── windows/           run_optipulse.bat · run_phone.bat · run_phone_wifi.bat · find_cameras.bat · train_pipeline.bat
+│   ├── windows/           run_windows.bat
 │   └── macos/             run_mac.sh
 ├── pipeline/              offline research pipeline: prepare data → train → evaluate → write report
 ├── results/               evidence: RESULTS.md, figures/, metrics/ (raw evaluation JSONs)
@@ -54,7 +54,7 @@ optipulse/
 ├── ubfc.py             UBFC-rPPG readers (video + contact PPG, timestamp handling)             (training)
 └── evaluation.py       window-level metrics + low-light / motion / low-fps stress tests         (evaluation)
 
-pipeline/               (run in this order by launchers/windows/train_pipeline.bat)
+pipeline/               (run in this order, see "Reproduce from scratch")
 ├── preprocess_ubfc.py  raw videos -> data/processed/ubfc_v2/*.npz (face crops + aligned contact PPG, 30 Hz)
 ├── audit_dataset.py    ground-truth quality audit -> results/metrics/dataset_audit.json
 ├── train_cv.py         5-fold subject-wise CV training -> models/vitalnet/*.pt + results/metrics/cv_results_*.json
@@ -79,15 +79,22 @@ pipeline/               (run in this order by launchers/windows/train_pipeline.b
 
 Always start from the repository root (the launchers do this for you).
 
-**Windows** (NVIDIA GPU): double-click `launchers\windows\run_optipulse.bat`, or from a terminal:
+**Windows** (NVIDIA GPU or CPU): double-click `launchers\windows\run_windows.bat`. The first run finds a
+64-bit Python 3.9+ (and offers to install Python 3.12 with winget if there is none), creates `.venv`, and
+installs PyTorch (the CUDA build matching the NVIDIA driver, or the CPU build when there is no NVIDIA GPU)
+plus `requirements.txt`. That takes 5–15 min and downloads ~3 GB. Later runs start in seconds. It runs 10
+models on an NVIDIA GPU and 2 on a CPU, shows low-confidence readings in amber and saves the raw video to
+`outputs/`. Extra arguments go to the app:
 
 ```bat
-launchers\windows\run_optipulse.bat                 :: webcam 0
-launchers\windows\run_optipulse.bat --camera 1      :: another camera
-launchers\windows\find_cameras.bat                 :: list every camera index / backend that works
-launchers\windows\run_phone.bat                    :: phone camera (DroidCam, camera 1 via MSMF) + lossless raw recording
-launchers\windows\run_phone_wifi.bat               :: phone camera directly over WiFi (DroidCam app, no PC client)
+launchers\windows\run_windows.bat                                         :: webcam 0
+launchers\windows\run_windows.bat --camera 1                              :: another camera
+launchers\windows\run_windows.bat --list_cameras                          :: list every camera index / backend that works
+launchers\windows\run_windows.bat --camera 1 --backend msmf --cam_fps 60  :: phone camera via the DroidCam PC client
+launchers\windows\run_windows.bat --camera http://<phone-ip>:4747/video   :: phone directly over WiFi (DroidCam app, no PC client)
+launchers\windows\run_windows.bat --save_raw ""                           :: no raw-video recording
 ```
+To reinstall from scratch, delete the `.venv` folder and run it again.
 
 **macOS** (Apple silicon or Intel): `bash launchers/macos/run_mac.sh`. The first run sets up its own Python
 environment in `.venv`. It uses the Apple GPU when its results match the CPU (otherwise the CPU) and 2 models,
@@ -154,10 +161,21 @@ from one dataset (see the limitations in [docs/METHOD.md](docs/METHOD.md)).
 
 ## Reproduce from scratch
 
-Needs Windows + an NVIDIA GPU and the UBFC-rPPG dataset in `data/raw/UBFC-rPPG/`:
+Needs Windows + an NVIDIA GPU and the UBFC-rPPG dataset in `data/raw/UBFC-rPPG/`. Run
+`launchers\windows\run_windows.bat` once to create `.venv`, then from the repository root:
 
 ```bat
-launchers\windows\train_pipeline.bat
+set EXCL=sub3,sub4,sub11,sub14,sub18,sub20,sub24
+.venv\Scripts\python pipeline\preprocess_ubfc.py
+.venv\Scripts\python pipeline\audit_dataset.py
+.venv\Scripts\python pipeline\train_cv.py --version 1 --exclude_train %EXCL% --prefix pix_ --report results\metrics\cv_results_pix.json
+.venv\Scripts\python pipeline\train_cv.py --version 4 --pair_w 0.5 --exclude_train %EXCL% --prefix mrc_ --report results\metrics\cv_results_mrc.json
+.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt" --tag pix
+.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/mrc_*.pt" --tag mrc
+.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system
+.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system_never_trained --never_trained %EXCL%
+.venv\Scripts\python pipeline\compare_pipelines.py
+.venv\Scripts\python pipeline\make_report.py
 ```
 = `preprocess_ubfc.py` → `audit_dataset.py` → `train_cv.py` (Pix, then MRC) → `eval_tracking.py`
 (CV system + never-trained check) → `compare_pipelines.py` → `make_report.py`, all in `pipeline/`

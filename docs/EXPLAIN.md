@@ -135,7 +135,7 @@ HeartRate/
 ├── optipulse/              THE SYSTEM: one Python package (library + live app; `python -m optipulse`)
 ├── models/                trained weights the app loads (10 VitalNet models + YOLO face detector)
 ├── launchers/             double-click / one-command starters
-│   ├── windows/           run_optipulse.bat, run_phone.bat, run_phone_wifi.bat, find_cameras.bat, train_pipeline.bat
+│   ├── windows/           run_windows.bat
 │   └── macos/             run_mac.sh
 ├── pipeline/              offline research pipeline: prepare data → train → evaluate → write report
 ├── results/               evidence: RESULTS.md (all tables), figures/, metrics/ (raw evaluation JSONs)
@@ -150,10 +150,10 @@ HeartRate/
 | Path | What it is |
 |---|---|
 | `README.md` | User-facing readme: how to run, headline results, folder layout. |
-| `requirements.txt` | Python packages: torch, numpy, scipy, opencv-python, ultralytics (YOLO), matplotlib. |
+| `requirements.txt` | Python packages: torch, numpy, scipy, opencv-python, pillow, ultralytics (YOLO), matplotlib. |
 | `optipulse/` | **The system.** All real logic (sections 5–8) plus the live app itself. Run it with `python -m optipulse` from the repository root. |
 | `models/` | **The trained weights that the app uses** (deployed models). |
-| `launchers/windows/` | `run_optipulse.bat` (webcam), `run_phone.bat` / `run_phone_wifi.bat` (phone as camera via DroidCam, with raw recording), `find_cameras.bat` (which camera indices work), `train_pipeline.bat` (re-does **everything** from the raw dataset, ≈5 h on an RTX 3070 Ti). Each one first changes into the repository root, so it can be double-clicked. |
+| `launchers/windows/run_windows.bat` | Windows launcher: on the first run it finds (or offers to install) Python, creates `.venv`, installs PyTorch (CUDA build for NVIDIA GPUs, else CPU) and `requirements.txt`, then runs the app (10 models on an NVIDIA GPU, 2 on a CPU). Extra arguments go to the app (`--camera 1`, `--list_cameras`, phone cameras, ...). Finds the repository root by itself, so it can be double-clicked. |
 | `launchers/macos/run_mac.sh` | Mac launcher: creates `.venv` on first run, installs packages, runs the app on the Apple GPU (MPS) with 2 models. |
 | `pipeline/` | Offline scripts that build the dataset cache, train, evaluate and write the report (table below). |
 | `results/` | `RESULTS.md` (all result tables, generated), `figures/` (plots), `metrics/` (raw JSON results of every evaluation run, read by `make_report.py`). |
@@ -186,7 +186,7 @@ HeartRate/
 | `ubfc.py` | Readers for the raw UBFC videos and their ground-truth files (incl. timestamp clean-up). |
 | `evaluation.py` | Scoring: 10-s windows, metrics (MAE, RMSE, r, …) and the deterministic stress tests (low light, motion, 12 fps). |
 
-### `pipeline/`: offline research pipeline (in the order `launchers/windows/train_pipeline.bat` runs them)
+### `pipeline/`: offline research pipeline (run in this order; commands in the README section "Reproduce from scratch")
 
 | Script | What it does |
 |---|---|
@@ -733,7 +733,7 @@ not hidden.
 - Result: 6.81 BPM end-to-end vs 1.59 now on the same videos.
 
 **Q: How long does training take and can I reproduce it?**
-`launchers/windows/train_pipeline.bat` on Windows with an NVIDIA GPU, ≈5 h total, needs the UBFC dataset in `data/raw/UBFC-rPPG/`.
+The commands in the README section "Reproduce from scratch" (Windows with an NVIDIA GPU), ≈5 h total, needs the UBFC dataset in `data/raw/UBFC-rPPG/`.
 
 **Q: What would you do next?**
 - Validate against a reference device in real webcam sessions.
@@ -760,8 +760,9 @@ python -m optipulse --no_track                 # disable the tracker
 python -m optipulse --always_show              # show the number even when the signal is weak (amber)
 ```
 
-Windows (in `launchers/windows/`, double-click or run from a terminal): `run_optipulse.bat`, `run_phone.bat` /
-`run_phone_wifi.bat` (DroidCam phone camera), `find_cameras.bat`, `train_pipeline.bat` (retrain everything).
+Windows: double-click `launchers\windows\run_windows.bat` (sets up `.venv` on the first run; NVIDIA GPU with
+10 models, else CPU with 2). Arguments go to the app, e.g. `run_windows.bat --list_cameras` or
+`run_windows.bat --camera 1 --backend msmf --cam_fps 60` (DroidCam phone camera).
 All options: `python -m optipulse --help`.
 
 Important options: `--window 10` (analysis seconds), `--min_window 6`, `--update 0.5` (seconds between
@@ -813,7 +814,7 @@ updates), `--ensemble N`, `--device auto|cuda|mps|cpu`, `--cam_fps`, `--fourcc`,
 | drawing the window | `optipulse/ui.py` → `LiveUI.render` |
 | augmentations | `optipulse/augment.py`; HR resampling in `optipulse/data.py` → `BatchBuilder.sample` |
 | dataset loading / ground truth | `optipulse/ubfc.py`, `pipeline/preprocess_ubfc.py`, `pipeline/audit_dataset.py` |
-| training | `pipeline/train_cv.py` (full run: `launchers/windows/train_pipeline.bat`) |
+| training | `pipeline/train_cv.py` (full run: README → "Reproduce from scratch") |
 | evaluation & stress tests | `optipulse/evaluation.py`, `pipeline/eval_tracking.py`, `pipeline/compare_pipelines.py` |
 | all numbers | `results/RESULTS.md` (raw JSON: `results/metrics/`); history of decisions: `docs/WORK_REPORT.md`; method write-up: `docs/METHOD.md` |
 | the old system | `archive/legacy_system/` (see `archive/README.md`) |

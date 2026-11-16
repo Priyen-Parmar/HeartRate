@@ -145,10 +145,11 @@ HeartRate/                  (on the PC: rename the old course-named folder on `E
 │   ├── vitalnet/pix_fold0-4.pt, mrc_fold0-4.pt   deployed ensemble (~2.5 MB each; versioned in git)
 │   └── face_detector/yolov8_face_nose_chest.pt   52 MB YOLOv8 (classes: face=0, nose, chest)
 ├── launchers/
-│   ├── windows/            run_optipulse.bat (webcam), run_phone.bat (DroidCam: --camera 1 --backend msmf --cam_fps 60 --save_raw auto),
-│   │                       run_phone_wifi.bat (http://<phone-ip>:4747/video), find_cameras.bat (flags flat "no picture" feeds),
-│   │                       train_pipeline.bat (preprocess → audit → train pix → train mrc → eval → report, ~5 h).
-│   │                       Each does `cd /d "%~dp0..\.."` first, then `python -m optipulse …` / `python pipeline\….py`.
+│   ├── windows/run_windows.bat   the only Windows launcher (replaced run_optipulse / run_phone / run_phone_wifi /
+│   │                       find_cameras / train_pipeline .bat on 2026-11-16): finds the repo root, finds or offers to
+│   │                       install Python, creates .venv, installs CUDA or CPU PyTorch + requirements.txt, runs
+│   │                       `python -m optipulse --camera 0 --always_show --save_raw auto [--ensemble 2 on CPU] <args>`.
+│   │                       Phone / camera listing are now arguments; the training commands are in README.
 │   └── macos/run_mac.sh    creates .venv, runs the app (finds the repo root by itself)
 ├── pipeline/               offline research pipeline (was scripts/)
 │   ├── preprocess_ubfc.py, audit_dataset.py
@@ -572,7 +573,7 @@ All of these read a raw recording: `<name>.mkv` + `<name>_timestamps.csv` (colum
 * **bench_loop / bench_prof:** a fake real-time camera serving frames from a recording, monkeypatched into
   `LM.Camera`, with `cv2.imshow`/`waitKey` stubbed. Runs `LM.run` and reports engine fps; it times
   `detect`/`render`/`infer`/`push`/`crop` via wrappers.
-* `launchers/windows/find_cameras.bat` / `--list_cameras`.
+* `launchers\windows\run_windows.bat --list_cameras` (or `python -m optipulse --list_cameras`).
 
 Notes:
 * The detector returns boxes as `[x1,y1,x2,y2]`; `BoxSmoother` state is `(cx, cy, size)`.
