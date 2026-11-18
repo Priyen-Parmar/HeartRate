@@ -1,188 +1,141 @@
-# OptiPulse: contactless heart rate from a camera
+# OptiPulse
 
-OptiPulse measures your heart rate (BPM) in real time from an ordinary webcam or phone camera, without
-any contact (*remote photoplethysmography*, rPPG). A YOLOv8 face tracker feeds a
-**10-model ensemble of two complementary rPPG networks**:
-* **VitalNet-Pix**: a 3D-CNN with an appearance-attention pixel path;
-* **VitalNet-MRC**: adds a linear-first, region-wise maximal-ratio-combining branch with noise-gated
-  fusion, trained with cross-illumination consistency.
+**Contactless heart-rate measurement from an ordinary webcam or phone camera.**
 
-The two are fused in the spectral domain and decoded by a **causal HMM heart-rate tracker** that uses
-no HR prior. Trained on UBFC-rPPG with heavy low-light / motion / heart-rate augmentation. Runs on an
-NVIDIA GPU (tested: RTX 3070 Ti Laptop), on an Apple-silicon Mac (Apple GPU) or on a plain CPU.
+OptiPulse estimates heart rate in real time from the tiny colour changes that each heartbeat causes in
+facial skin. This technique is called remote photoplethysmography (rPPG). On people the models never
+saw during training, it is accurate to **1.45 BPM** (mean absolute error) in normal light. It runs on an
+NVIDIA GPU, an Apple-silicon Mac or a plain CPU.
 
-**New here? Read [docs/EXPLAIN.md](docs/EXPLAIN.md)**: the whole project explained from zero, with
-answers to the usual questions.
+![OptiPulse live window](results/figures/live_ui_preview.png)
+
+## How it works
+
+![Pipeline](results/figures/optipulse_pipeline_diagram.png)
+
+1. **Face tracking.** A YOLOv8 face detector, a motion-adaptive box smoother and a stable 1.6× face crop.
+2. **Real-time resampling.** The last 10 s of crops are resampled onto an exact 30 Hz timeline using each
+   frame's real capture time. Cameras that deliver 12–60 fps with jitter are therefore handled correctly.
+3. **VitalNet ensemble.** Two complementary families of small 3D-CNNs (~0.6 M parameters each) turn the
+   clip into a pulse waveform:
+   * **VitalNet-Pix** uses an appearance-attention pixel path.
+   * **VitalNet-MRC** adds a linear-first, region-wise maximal-ratio-combining branch with noise-gated
+     fusion. It is trained with a cross-illumination consistency loss.
+4. **Spectral fusion and tracking.** The models' power spectra are fused, and a causal HMM tracker with
+   no heart-rate prior decodes them into a heart rate and a confidence.
+5. **Honest display.** A number is shown only after the tracker locks. It changes no faster than a
+   heart can. It is **hidden when the pulse signal is too weak** to trust.
+
+## Quick start
+
+| Platform | Command |
+|---|---|
+| Windows (NVIDIA GPU or CPU) | double-click `launchers\windows\run_windows.bat` |
+| macOS (Apple silicon or Intel) | `bash launchers/macos/run_mac.sh` |
+| Any OS, manually | `pip install torch -r requirements.txt`, then `python -m optipulse --ensemble 2` |
+
+The first launcher run creates a private `.venv` and installs everything (1.5–3 GB, 5–15 min). Sit
+50–70 cm from the camera with light **in front** of you. The first reading appears after 8–15 s. Press
+`q` to quit.
+
+Useful options:
+
+```bash
+python -m optipulse --list_cameras                       # find your camera index
+python -m optipulse --camera 1 --ensemble 2              # another camera, 2 models (laptop CPU)
+python -m optipulse --always_show --save_raw auto        # show weak readings in amber, keep a lossless recording
+python -m optipulse --video outputs/raw_<time>.mkv --headless --csv out.csv   # replay a recording offline
+```
+
+Every option, the window elements, the CSV log and troubleshooting are covered in **[docs/USAGE.md](docs/USAGE.md)**.
+
+## Results
+
+MAE in BPM on UBFC-rPPG, from 5-fold subject-wise cross-validation. Every subject is scored only by
+models that never saw that person. The results cover 43 subjects with reliable ground truth, in 10-s
+windows. Low light, motion and 12 fps are simulated stress tests.
+
+| Method | Normal | Low light | Motion | Low light + motion | 12 fps |
+|---|---|---|---|---|---|
+| POS (classical baseline) | 20.56 | 25.97 | 29.17 | 27.64 | 22.74 |
+| VitalNet-Pix, single model | 1.42 | 10.91 | 4.06 | 11.47 | 1.50 |
+| **OptiPulse full system** | **1.45** | **7.55** | **3.12** | **8.23** | **1.59** |
+
+| End-to-end live app on the raw videos | MAE (BPM) | Within 5 BPM |
+|---|---|---|
+| Previous system (PhysFormerX transformer) | 6.81 | 63.4 % |
+| **OptiPulse** | **1.59** | **95.9 %** |
+| OptiPulse, readings that pass the honesty gate (95 % of them) | 1.17 | – |
+
+All tables, ablations and figures are in [results/RESULTS.md](results/RESULTS.md).
+
+**Limitations.**
+* Everything was validated on a single dataset (UBFC-rPPG): seated, indoor, mostly lighter skin tones.
+* The low-light and motion conditions are simulated.
+* On real webcams the pulse signal is often much weaker than in the dataset, and real-world accuracy
+  against a reference device has not yet been measured (see [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md)).
+* **This is a research prototype, not a medical device.**
 
 ## Repository layout
 
 ```text
-HeartRate/
-├── README.md              you are here
-├── requirements.txt       Python packages
-├── optipulse/             THE SYSTEM: one Python package (signal processing, networks, tracker, live app)
-├── models/                trained weights the app loads (10 VitalNet models + YOLO face detector)
-├── launchers/             one-click starters
-│   ├── windows/           run_windows.bat
-│   └── macos/             run_mac.sh
-├── pipeline/              offline research pipeline: prepare data → train → evaluate → write report
-├── results/               evidence: RESULTS.md, figures/, metrics/ (raw evaluation JSONs)
-├── docs/                  reading material (see the table below)
-├── outputs/               created by the app (git-ignored): HR logs, raw recordings, screenshots
-└── data/                  git-ignored: the UBFC-rPPG dataset, only needed for training / evaluation
+optipulse/      the system: face tracking, VitalNet, signal processing, tracker, live app (python -m optipulse)
+models/         trained weights: models/vitalnet/{pix,mrc}_fold{0-4}.pt + YOLOv8 face detector
+launchers/      one-click starters for Windows and macOS
+pipeline/       offline pipeline: preprocess → audit → train → evaluate → report
+results/        RESULTS.md, figures/, metrics/ (raw JSON of every evaluation)
+docs/           documentation, final report and presentation
+outputs/        created at run time (git-ignored): HR logs, raw recordings, screenshots
+data/           not distributed (git-ignored): UBFC-rPPG dataset, only needed to train or evaluate
 ```
 
-To **run** the system you need only `optipulse/`, `models/` and a launcher. To **retrain or re-evaluate**
-it you also need `pipeline/` and the dataset in `data/`.
+## Documentation
 
-<details>
-<summary>Every file in <code>optipulse/</code> and <code>pipeline/</code></summary>
-
-```text
-optipulse/
-├── __main__.py         `python -m optipulse` starts the app
-├── app.py              the live app: camera / video input, face thread, engine, UI, CSV log, raw recording, CLI options
-├── live.py             real-time engine: 30 Hz resampling, ensemble, spectral fusion, tracking, display lock, honesty gate
-├── ui.py               live window: camera view + instrument panel
-├── face.py             YOLOv8 face detector, motion-adaptive box smoother, 1.6x crop
-├── model.py            VitalNet v1 (Pix) / v4 (MRC region branch + noise gate) + losses
-├── tracking.py         causal spectral HMM heart-rate tracker
-├── dsp.py              detrend / band-pass / HR + SNR estimator / POS, CHROM, GREEN baselines
-├── paths.py            every folder the project reads or writes, in one place
-├── augment.py          GPU augmentations: low light, noise, motion, HR resampling, fps drop     (training)
-├── data.py             in-memory dataset + GPU batch builder                                   (training)
-├── ubfc.py             UBFC-rPPG readers (video + contact PPG, timestamp handling)             (training)
-└── evaluation.py       window-level metrics + low-light / motion / low-fps stress tests         (evaluation)
-
-pipeline/               (run in this order, see "Reproduce from scratch")
-├── preprocess_ubfc.py  raw videos -> data/processed/ubfc_v2/*.npz (face crops + aligned contact PPG, 30 Hz)
-├── audit_dataset.py    ground-truth quality audit -> results/metrics/dataset_audit.json
-├── train_cv.py         5-fold subject-wise CV training -> models/vitalnet/*.pt + results/metrics/cv_results_*.json
-├── eval_tracking.py    CV evaluation with / without tracking -> results/metrics/tracking_*.json
-├── compare_pipelines.py  full live app evaluation on all videos -> results/metrics/pipeline_comparison.json
-└── make_report.py      results/metrics/*.json -> results/RESULTS.md + results/figures/
-```
-</details>
-
-### Where to read what
-
-| Document | What it is |
+| | |
 |---|---|
-| [docs/EXPLAIN.md](docs/EXPLAIN.md) | Start here: the whole project explained for a newcomer, plus a Q&A for presentations. |
-| [docs/METHOD.md](docs/METHOD.md) | Paper-style method description: contributions, evaluation protocol, limitations. |
-| [results/RESULTS.md](results/RESULTS.md) | Every result table and figure (generated by `pipeline/make_report.py`). |
-| [docs/WORK_REPORT.md](docs/WORK_REPORT.md) | Lab notebook: everything that was tried, what worked, what was rejected and why. |
-| [docs/MAC_GUIDE.md](docs/MAC_GUIDE.md) | Running on a Mac, and how to set up a good test (lighting first). |
-| [docs/HANDOFF_CONTEXT.md](docs/HANDOFF_CONTEXT.md) | Notes for whoever continues the project. |
+| [docs/EXPLAIN.md](docs/EXPLAIN.md) | **Start here as a developer.** How the system and the code work, module by module |
+| [docs/USAGE.md](docs/USAGE.md) | Installation, all options, the UI, log files, testing, troubleshooting |
+| [docs/METHOD.md](docs/METHOD.md) | Method write-up: contributions, evaluation protocol, limitations |
+| [results/RESULTS.md](results/RESULTS.md) | Every result table and figure |
+| [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) | Open problems and next steps |
+| [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md) | Chronological lab notebook |
+| [docs/report/](docs/report/) · [docs/presentation/](docs/presentation/) | Final UGP report (PDF + LaTeX) and slides |
 
-## Run it
+## Reproducing the results
 
-Always start from the repository root (the launchers do this for you).
-
-**Windows** (NVIDIA GPU or CPU): double-click `launchers\windows\run_windows.bat`. The first run finds a
-64-bit Python 3.9+ (and offers to install Python 3.12 with winget if there is none), creates `.venv`, and
-installs PyTorch (the CUDA build matching the NVIDIA driver, or the CPU build when there is no NVIDIA GPU)
-plus `requirements.txt`. That takes 5–15 min and downloads ~3 GB. Later runs start in seconds. It runs 10
-models on an NVIDIA GPU and 2 on a CPU, shows low-confidence readings in amber and saves the raw video to
-`outputs/`. Extra arguments go to the app:
-
-```bat
-launchers\windows\run_windows.bat                                         :: webcam 0
-launchers\windows\run_windows.bat --camera 1                              :: another camera
-launchers\windows\run_windows.bat --list_cameras                          :: list every camera index / backend that works
-launchers\windows\run_windows.bat --camera 1 --backend msmf --cam_fps 60  :: phone camera via the DroidCam PC client
-launchers\windows\run_windows.bat --camera http://<phone-ip>:4747/video   :: phone directly over WiFi (DroidCam app, no PC client)
-launchers\windows\run_windows.bat --save_raw ""                           :: no raw-video recording
-```
-To reinstall from scratch, delete the `.venv` folder and run it again.
-
-**macOS** (Apple silicon or Intel): `bash launchers/macos/run_mac.sh`. The first run sets up its own Python
-environment in `.venv`. It uses the Apple GPU when its results match the CPU (otherwise the CPU) and 2 models,
-which suits 8 GB RAM. Details: [docs/MAC_GUIDE.md](docs/MAC_GUIDE.md).
-
-**Any OS, by hand** (`pip install -r requirements.txt` first):
+Reproduction needs an NVIDIA GPU and the [UBFC-rPPG](https://sites.google.com/view/ybenezeth/ubfcrppg)
+dataset, placed flat in `data/raw/UBFC-rPPG/` as `vid_<name>.avi` + `ground_truth_<name>.txt` pairs.
+From the repository root:
 
 ```bash
-python -m optipulse                                   # webcam 0, NVIDIA GPU if present (10 models)
-python -m optipulse --device cpu --ensemble 2         # machine without a GPU (~1.8 s per update)
-python -m optipulse --video clip.mp4 --headless --csv out.csv     # offline file
-python -m optipulse --video outputs/raw_<time>.mkv    # replay your own raw recording with its real timestamps
-python -m optipulse --ubfc sub42 --weights models/vitalnet/pix_fold0.pt models/vitalnet/mrc_fold0.pt --headless
-                                                     # score vs ground truth (fold-0 models never saw sub42; needs data/)
-python -m optipulse --no_track                        # plain per-window estimate instead of the tracker
-python -m optipulse --save_raw auto                   # also save the raw camera video losslessly (+ timestamps)
-python -m optipulse --always_show                     # always show the tracked value; weak-signal readings in amber
-python -m optipulse --fourcc YUY2                     # force a camera stream format (default auto: MJPG for dshow, NV12 for msmf)
-python -m optipulse --help                            # every option
+EXCL=sub3,sub4,sub11,sub14,sub18,sub20,sub24     # subjects whose ground truth fails the audit
+
+python pipeline/preprocess_ubfc.py               # face crops + aligned PPG at 30 Hz → data/processed/ubfc_v2/
+python pipeline/audit_dataset.py --skip_legacy   # ground-truth audit → results/metrics/dataset_audit.json
+python pipeline/train_cv.py --version 1 --pair_w 0   --exclude_train $EXCL --prefix pix_ --report results/metrics/cv_results_pix.json
+python pipeline/train_cv.py --version 4 --pair_w 0.5 --exclude_train $EXCL --prefix mrc_ --report results/metrics/cv_results_mrc.json
+python pipeline/eval_tracking.py --models "models/vitalnet/pix_*.pt" --tag pix
+python pipeline/eval_tracking.py --models "models/vitalnet/mrc_*.pt" --tag mrc
+python pipeline/eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system
+python pipeline/eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system_never_trained --never_trained $EXCL
+python pipeline/compare_pipelines.py             # the complete live app on every video
+python pipeline/make_report.py                   # → results/RESULTS.md + results/figures/
 ```
 
-### What you see
-
-Sit ~50–80 cm from the camera with your face lit from the front (a lamp or window in front of you,
-not behind). The window shows:
-
-* **left:** the camera. Corner brackets mark the tracked face (blue = measuring, green = stable,
-  amber = weak signal). A warm glow marks the skin the network actually reads the pulse from;
-  press `h` to toggle it.
-* **right:** the panel.
-  * Big BPM, with a heart beating at the measured rate.
-  * A state chip, signal-quality bars, the 60-s heart-rate trend and the live pulse waveform.
-  * Hints when it is too dark, the camera fps is low, your head is moving or the light is behind you.
-
-A number appears only once the tracker is confident (usually 8–15 s after you sit down). After that,
-the displayed value changes by at most 3 BPM per second, or ~9 BPM/s when the tracker is very sure.
-A resting heart cannot go from 50 to 120 in one second, but real changes such as exercise recovery are
-followed. If the pulse signal itself is too weak (signal SNR below -1.5 dB, median over 5 s), **no number
-is shown** ("No clear pulse"): a confident-looking wrong number is worse than none. On the dataset videos
-this hides 5 % of readings and lowers the error of the shown ones from 1.59 to 1.17 BPM.
-Keys: `q` quit · `r` reset · `s` screenshot · `f` fullscreen · `h` pulse-region overlay ·
-`c` camera driver settings (Windows: turn off auto-exposure / auto white balance).
-
-Every session writes `outputs/hr_log_<time>.csv` (time, HR, raw HR, signal SNR, tracker confidence,
-effective fps, `shown` = 1 if the number was displayed, 5-s SNR, head motion, face / background brightness),
-so you can line it up second-by-second against a chest strap / pulse oximeter / smartwatch reading.
-
-## Results (unseen subjects, 5-fold subject-wise cross-validation)
-
-MAE in BPM over 10-s windows, 43 subjects with reliable ground truth. Every subject is scored only by
-models that never saw that person.
-
-| Method | normal | low light | motion | low light + motion | 12 fps webcam |
-|---|---|---|---|---|---|
-| POS (classical) | 20.56 | 25.97 | 29.17 | 27.64 | 22.74 |
-| Old PhysFormerX monitor (normal video) | 6.81 | - | - | - | - |
-| VitalNet-Pix (single model) | 1.42 | 10.91 | 4.06 | 11.47 | 1.50 |
-| **OptiPulse full system** | **1.45** | **7.55** | **3.12** | **8.23** | **1.59** |
-| **Live app end-to-end on the raw videos** (face detector -> display) | **1.59** | - | - | - | - |
-
-In normal light, 96 % of windows are within 5 BPM. 0 MAE is not physically reachable: the contact-PPG
-reference itself is only good to about +-1 BPM. Low light remains the hardest case, and all numbers come
-from one dataset (see the limitations in [docs/METHOD.md](docs/METHOD.md)).
-
-## Reproduce from scratch
-
-Needs Windows + an NVIDIA GPU and the UBFC-rPPG dataset in `data/raw/UBFC-rPPG/`. Run
-`launchers\windows\run_windows.bat` once to create `.venv`, then from the repository root:
-
-```bat
-set EXCL=sub3,sub4,sub11,sub14,sub18,sub20,sub24
-.venv\Scripts\python pipeline\preprocess_ubfc.py
-.venv\Scripts\python pipeline\audit_dataset.py
-.venv\Scripts\python pipeline\train_cv.py --version 1 --exclude_train %EXCL% --prefix pix_ --report results\metrics\cv_results_pix.json
-.venv\Scripts\python pipeline\train_cv.py --version 4 --pair_w 0.5 --exclude_train %EXCL% --prefix mrc_ --report results\metrics\cv_results_mrc.json
-.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt" --tag pix
-.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/mrc_*.pt" --tag mrc
-.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system
-.venv\Scripts\python pipeline\eval_tracking.py --models "models/vitalnet/pix_*.pt,models/vitalnet/mrc_*.pt" --tag system_never_trained --never_trained %EXCL%
-.venv\Scripts\python pipeline\compare_pipelines.py
-.venv\Scripts\python pipeline\make_report.py
-```
-= `preprocess_ubfc.py` → `audit_dataset.py` → `train_cv.py` (Pix, then MRC) → `eval_tracking.py`
-(CV system + never-trained check) → `compare_pipelines.py` → `make_report.py`, all in `pipeline/`
-(~5 h on an RTX 3070 Ti). Weights land in `models/vitalnet/`, results in `results/`.
+On Windows, use `set EXCL=...` and `%EXCL%`. The run takes about 5 h on an RTX 3070 Ti Laptop.
+Training overwrites `models/vitalnet/`. A quick check needs only one subject:
+`python -m optipulse --ubfc sub42 --weights models/vitalnet/pix_fold0.pt models/vitalnet/mrc_fold0.pt --headless`
+should give an MAE of 0.64 BPM.
 
 ## Data and privacy
 
-* Dataset: UBFC-rPPG (Bobbia et al., 2019), not included. Subjects 21 and 27 of Dataset 2 must not appear in
-  publications; never publish frames of sub27.
-* `outputs/` holds recordings and screenshots of real faces. It is git-ignored; never publish its contents.
+* **UBFC-rPPG** (Bobbia et al., *Pattern Recognition Letters*, 2019) is not included; obtain it from its
+  authors. Under the dataset's terms, subjects 21 and 27 must not appear in publications, and frames of
+  subject 27 must never be published.
+* **`outputs/`** contains recordings and screenshots of real faces. It is git-ignored; do not commit or
+  share its contents without consent.
+
+## Team
+
+Undergraduate Project (UGP), Department of Design: Jayant Mitawa, Priyen Parmar, Satwik Raj Wadhwa,
+Divyansh Bansal, Anuj Agrawal.

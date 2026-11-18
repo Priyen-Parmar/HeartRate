@@ -1,12 +1,17 @@
-# Work report - everything that was done
+# Development log
 
-Machine: Windows 11, RTX 3070 Ti Laptop (8 GB), 16 GB RAM, Python 3.13.5 (miniconda), torch 2.6.0+cu124,
-ultralytics 8.4.37. Nothing is committed to git: all changes are in the working tree (moves were done with
-`git mv`, so `git status` shows them as renames).
+The project's lab notebook. It records what was built, tried, measured and rejected, and why, in the
+order it happened. Read it when you want the reasoning and evidence behind a design decision. For a
+structured introduction, see [EXPLAIN.md](EXPLAIN.md).
 
-> **Paths:** sections 1–13 use the folder names of the time they were written. The repository was
-> restructured on 2026-11-14 (section 14), e.g. `scripts/` → `pipeline/`, `reports/` → `results/`,
-> `artifacts/legacy_code/` → `archive/legacy_system/`. Section 14 has the full old → new table.
+> **Historical paths.** Each section uses the folder names in use when it was written. The repository was
+> restructured on 2026-11-14 (§14), e.g. `scripts/` → `pipeline/` and `reports/` → `results/`; §14 has the
+> old → new table. The `archive/` folder mentioned in §2, §14 and elsewhere (legacy PhysFormerX code and
+> experiment scripts) was later removed from the repository and is no longer distributed. `WORK_REPORT.md` and
+> `MAC_GUIDE.md` are now [DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md) and [USAGE.md](USAGE.md).
+
+Development machine for §1–11: Windows 11, RTX 3070 Ti Laptop (8 GB), 16 GB RAM, Python 3.13.5,
+torch 2.6.0+cu124, ultralytics 8.4.37. §12–14 were done on an Apple M4 Mac.
 
 ## 1. Downloaded / fetched from the internet
 
@@ -381,3 +386,13 @@ Not testable on the Mac (no dataset, no NVIDIA GPU): `launchers/windows/train_pi
 regression (sub42 0.64, sub37 2.22). Run them once on the PC after pulling.
 
 Disk/memory: nothing downloaded.
+
+## 15. Documentation restructure (2026-11-18)
+
+* `docs/` reorganised: [README.md](README.md) (index), [EXPLAIN.md](EXPLAIN.md) (rewritten as a codebase
+  onboarding guide), [USAGE.md](USAGE.md) (new; replaces the Mac guide and covers all platforms),
+  [METHOD.md](METHOD.md), [FUTURE_WORK.md](FUTURE_WORK.md) (new; the open problems and next steps from the
+  former session handoff notes, which were removed), this log (renamed from `WORK_REPORT.md`).
+* Report sources moved to `docs/report/`, slides to `docs/presentation/`. The duplicate report PDF in the
+  repository root was removed.
+* Root README rewritten. No code, model or result changed.

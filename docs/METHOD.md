@@ -1,6 +1,8 @@
 # OptiPulse: noise-aware remote heart-rate estimation with linear-first region combining, cross-illumination consistency and causal spectral tracking
 
-*Draft write-up of the method. Results: `results/RESULTS.md`.*
+*Paper-style description of the method: what is new, what is borrowed, how it was evaluated and where it
+falls short. Full results: [results/RESULTS.md](../results/RESULTS.md). Code walkthrough:
+[EXPLAIN.md](EXPLAIN.md).*
 
 ## Problem
 
@@ -64,6 +66,12 @@ We combine ideas from several lines of work. None of the parts below is copied a
      requantisation, colour cast, side light, illumination drift and exposure steps, per-frame motion
      and jumps, 10-25 fps capture re-interpolated to 30 Hz.
    * A ground-truth audit that keeps subjects with broken contact PPG out of training.
+7. **Honest live display** (`optipulse/live.py: HREngine`). The tracked value is shown only after the
+   tracker locks (confidence >= 0.6, or 20 s). It then moves at most 3 BPM/s (9 BPM/s when confidence
+   >= 0.75), which limits the speed of change, not the value. It is hidden when the 5-s median pulse SNR
+   drops below -1.5 dB. The gate uses SNR rather than tracker confidence, because the tracker can be
+   confidently consistent on a steady artefact. On the dataset the gate hides 5 % of readings and lowers
+   the error of the rest from 1.59 to 1.17 BPM; the threshold was chosen on the same videos.
 
 ## Evaluation protocol (why the numbers are honest)
 
