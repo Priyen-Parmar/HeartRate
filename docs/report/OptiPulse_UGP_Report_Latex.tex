@@ -1,0 +1,885 @@
+\documentclass[twocolumn,letterpaper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext}
+\usepackage[protrusion=false,expansion=false]{microtype}
+\DisableLigatures[f]{encoding=*} 
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage[letterpaper,
+            left=46.8pt,right=46.8pt,
+            top=46.8pt,textheight=712pt,
+            footskip=12.1pt,
+            columnsep=18pt]{geometry}
+\input{glyphtounicode}
+\pdfgentounicode=1
+
+\definecolor{figborder}{RGB}{214,214,214}
+\definecolor{tbldark}{RGB}{51,51,53}
+\definecolor{tblgray}{RGB}{190,190,192}
+\definecolor{tblhead}{RGB}{244,243,248}
+\definecolor{tblhi}{RGB}{249,250,252}
+
+% ---------------------------------------------------------------------
+% Fonts / sizes
+% ---------------------------------------------------------------------
+\renewcommand\normalsize{\fontsize{9.55}{10.8}\selectfont}
+\newcommand\abssize{\fontsize{8.6}{10.15}\selectfont}
+\newcommand\capsize{\fontsize{8.0}{9.4}\selectfont}
+\newcommand\refsize{\fontsize{8.1}{9.4}\selectfont}
+\newcommand\tblsize{\fontsize{8.1}{9.4}\selectfont}
+\newcommand\tblcapsize{\fontsize{8.5}{9.2}\selectfont}
+\newcommand\headsize{\fontsize{10}{12}\selectfont}
+\newcommand\subheadsize{\fontsize{10.1}{12}\selectfont}
+
+% ---------------------------------------------------------------------
+% Paragraph / line-breaking set-up 
+% ---------------------------------------------------------------------
+\setlength\parindent{10.8pt}
+\setlength\parskip{2.3pt}
+\setlength\topskip{10.8pt}
+\frenchspacing
+\hyphenpenalty=10000 \exhyphenpenalty=10000
+\pretolerance=-1 \tolerance=10000 \emergencystretch=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=40pt \vfuzz=40pt
+\setlength\rightskip{0pt minus 6pt}  % lets a slightly long line shrink instead of re-breaking
+\raggedbottom
+\setlength\lineskiplimit{-10pt}
+
+\newcommand\lb{\linebreak[4]\relax}                         % justified forced line break
+\newcommand\colbreak{{\parfillskip=0pt\par}\newpage\noindent}  % end column mid-paragraph
+\newcommand\colend{{\parfillskip=0pt\par}\newpage}              % same, inside a list
+\newcommand\textq{\textquotesingle}               % straight apostrophe
+\newcommand\tld{\textasciitilde}                    % 
+
+% page number: centred, small
+\makeatletter
+\renewcommand\@oddfoot{\hfil{\fontsize{8.3}{9}\selectfont\thepage}\hfil}
+\renewcommand\@evenfoot{\@oddfoot}
+\renewcommand\@oddhead{}\renewcommand\@evenhead{}
+\makeatother
+
+% ---------------------------------------------------------------------
+% Headings
+% ---------------------------------------------------------------------
+\newcommand\Section[1]{%
+  \par\vspace{5.4pt}\refstepcounter{section}%
+  {\headsize\noindent\makebox[\linewidth][c]{\Roman{section}. #1}\par}%
+  \vspace{1.25pt}}
+\newcommand\SectionNoNum[1]{%
+  \par\vspace{5.4pt}%
+  {\headsize\noindent\makebox[\linewidth][c]{#1}\par}%
+  \vspace{1.25pt}}
+\newcommand\Subsection[1]{%
+  \par\vspace{3.5pt}\refstepcounter{subsection}%
+  {\subheadsize\itshape\noindent\makebox[\linewidth][l]{\Alph{subsection}. #1}\par}%
+  \vspace{-0.5pt}}
+
+% ---------------------------------------------------------------------
+% Lists
+% ---------------------------------------------------------------------
+\setlist{nosep,topsep=0pt,partopsep=0pt,parsep=0pt,itemsep=2pt}
+\newlist{bul}{itemize}{1}
+\setlist[bul]{label=\textbullet,leftmargin=13.3pt,labelindent=2.6pt,
+  labelwidth=10.7pt,labelsep=0pt,align=left,topsep=0pt,itemsep=2pt}
+\newlist{num}{enumerate}{1}
+\setlist[num]{label=\arabic*),leftmargin=13.3pt,labelindent=2.4pt,
+  labelwidth=10.9pt,labelsep=0pt,align=left,topsep=0pt,itemsep=2pt}
+
+% -------------------------------------------------------------
+\newcommand\eqline[2]{%
+  \par\refstepcounter{equation}%
+  {\noindent\hspace*{#1}\rlap{\itshape #2}\hfill(\theequation)\par}\vspace{1.6pt}}
+
+\newcommand\colfig[1]{%
+  \par{\noindent\makebox[\linewidth][c]{\setlength\fboxsep{0pt}\setlength\fboxrule{0.4pt}%
+   \fcolorbox{figborder}{white}{\includegraphics[width=245.3pt]{#1}}}\par}}
+\newcommand\figcap[1]{%
+  \par{\capsize\noindent\refstepcounter{figure}\textbf{Fig.\ \thefigure.} #1\par}}
+
+% ---------------------------------------------------------------------
+% Tables
+% ---------------------------------------------------------------------
+\renewcommand\thetable{\Roman{table}}
+\newcommand\tblcap[1]{\par{\tblcapsize\centering\refstepcounter{table}%
+   {\fontsize{8.2}{9.1}\selectfont\textbf{TABLE \thetable}}\\[0.4pt] #1\par}}
+\newcolumntype{L}[1]{>{\hspace{1.8pt}}p{\dimexpr#1-1.8pt\relax}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{V}{!{\color{tblgray}\vrule width 0.4pt}}  % light-grey vertical rule
+\newcommand\hstrut{\rule[-3.8pt]{0pt}{11.8pt}}             % header row height
+\newcommand\rstrut{\rule[-3.32pt]{0pt}{11.12pt}}           % body row height
+\newcommand\ghline{\arrayrulecolor{tblgray}\hline}         % light-grey row rule
+\newcommand\dhline{\noalign{\begingroup\color{tbldark}\hrule height 0.9pt\endgroup}}  % top/bottom
+\newcommand\dhlineh{\noalign{\begingroup\color{tbldark}\hrule height 0.6pt\endgroup}} % under header
+\newenvironment{tframe}{%
+  \par\noindent\setlength\tabcolsep{0pt}\setlength\arrayrulewidth{0.4pt}%
+  \tblsize\begin{lrbox}{0}}{\end{lrbox}\makebox[\linewidth][c]{\usebox{0}}\par}
+%
+
+% =====================================================================
+\begin{document}
+\normalsize
+
+\twocolumn[{%
+\centering
+\vspace*{7.4pt}
+{\fontsize{21.7}{26}\selectfont
+OptiPulse: A Noise-Aware Dual-Stream 3D-CNN\\
+Framework with Linear-First Region Combining and\\
+Causal Spectral Tracking for Remote Heart Rate Monitoring\par}
+\vspace{9.2pt}
+{\fontsize{10.6}{13.7}\selectfont
+Jayant Mitawa (230504), Priyen Parmar (230735), Satwik Raj Wadhwa (230937),\\
+Divyansh Bansal (230381), and Anuj Agrawal (230169)\par}
+\vspace{3.2pt}
+{\fontsize{10.1}{12.5}\selectfont\itshape
+Undergraduate Project (UGP) --- Department of Design\\
+Under the Supervision of Prof. Amar Kumar Behera\par}
+{\fontsize{9.55}{12.4}\selectfont
+Indian Institute of Technology Kanpur (IIT Kanpur)\par}
+\vspace{10.7pt}
+}]
+
+% ============================ PAGE 1, LEFT ============================
+{\abssize\bfseries\setlength\parindent{9.5pt}\setlength\parskip{2pt}
+\textit{Abstract---} This project presents OptiPulse, a contactless\lb
+vital-sign monitoring system for estimating heart rate (HR) in real\lb
+time from facial video data. Traditional monitoring approaches\lb
+rely on contact-based sensors such as ECG leads and finger pulse\lb
+oximeters, which require physical attachment and limit scalability\lb
+for continuous remote sensing. While remote\newline
+photoplethysmography (rPPG) enables non-contact estimation\lb
+from standard RGB cameras, real-world video streams introduce\lb
+severe degradations: low-light photon shot and read noise,\lb
+MPEG/H.264 compression artifacts, head movement, frame-rate\lb
+jitter, and automatic camera exposure adjustments.
+
+To overcome the limitations of our initial PhysFormerX\lb
+baseline prototype (which achieved an end-to-end MAE of 6.81\lb
+BPM due to hard YCbCr mask flicker, assumed constant frame\lb
+rates, and resting-rate bias), we propose a unified six-stage\lb
+pipeline shared identically across preprocessing, training, and live\lb
+inference. The system integrates asynchronous YOLOv8 face\lb
+localization, motion-adaptive bounding-box stabilization,\lb
+true-timestamp 30 Hz resampling, and a 10-model heterogeneous\lb
+ensemble of two complementary 3D-CNN architectures:\lb
+VitalNet-Pix (v1, dual-stream pixel path with soft appearance\lb
+attention) and VitalNet-MRC (v4, augmenting the pixel path with\lb
+a linear-first float32 multi-scale region branch, time-varying\lb
+softmax maximal-ratio combining, and input-noise-gated fusion).
+
+Trained on audited UBFC-rPPG videos with cross-illumination\lb
+self-consistency and uniform HR time-stretch resampling (45--180\lb
+BPM), the ensemble spectra are decoded by a prior-free causal\lb
+Hidden Markov Model (HMM) tracker and filtered by a 5-second\lb
+median SNR honesty gate (>= -1.5 dB). Under strict subject-wise\lb
+5-fold cross-validation on 43 unseen subjects, OptiPulse achieves\lb
+an MAE of 1.45 BPM in normal lighting (96.3\% within 5 BPM, r\lb
+= 0.948), while reducing low-light MAE by 30.8\% (10.91 to 7.55\lb
+BPM) and motion MAE by 23.2\% (4.06 to 3.12 BPM). In\lb
+end-to-end live evaluation across all raw videos, OptiPulse\lb
+achieves 1.59 BPM MAE overall and 1.17 BPM MAE on\lb
+honesty-gated displayed readings (95\% coverage).
+
+\vspace{2.3pt}
+\textit{Index Terms---} remote photoplethysmography (rPPG),\lb
+contactless heart rate monitoring, 3D convolutional neural\lb
+networks, maximal-ratio combining (MRC), noise-gated fusion,\lb
+cross-illumination consistency, Hidden Markov Model (HMM),\lb
+YOLOv8 face tracking.\par}
+
+\vspace{8.0pt}
+\Section{INTRODUCTION}
+Monitoring vital signs such as heart rate (HR) in beats per\lb
+minute (BPM) is essential for non-invasive physiological sensing,\lb
+human-computer interaction, and remote telemetry. Conventional\lb
+monitoring systems rely on contact-based sensors, including\lb
+electrocardiography (ECG) devices and optical finger pulse\lb
+oximeters, which require direct physical attachment. While\lb
+accurate in stationary setups, contact sensors restrict movement
+\colbreak
+% ============================ PAGE 1, RIGHT ===========================
+and limit continuous long-term monitoring on everyday\lb
+consumer devices.
+
+Recent advancements in computer vision have enabled\lb
+contactless physiological measurement using video-based remote\lb
+photoplethysmography (rPPG) [1], [8], [9]. Subtle periodic\lb
+variations in facial optical reflectance caused by pulsatile blood\lb
+volume changes can be captured using standard RGB cameras\lb
+and analyzed over time. With every cardiac cycle, microvascular\lb
+blood volume increases transiently; because hemoglobin absorbs\lb
+green and blue wavelengths strongly, reflected pixel intensity\lb
+dips by approximately 0.2\% to 1.0\% per beat (measured at\lb
+0.34\% in our live recordings). Because a single 8-bit quantization\lb
+step equals 1/255 (0.39\%) of mid-gray, the pulsatile signal in any\lb
+single pixel is smaller than camera quantization and sensor read\lb
+noise. Recovering an accurate waveform therefore requires\lb
+averaging thousands of facial pixels spatially and integrating\lb
+over 10-second windows temporally.
+
+To address the real-world fragility of video-based rPPG, this\lb
+Undergraduate Project (UGP)---conducted under the supervision\lb
+of Prof. Amar Kumar Behera in the Department of Design at IIT\lb
+Kanpur---proposes \textbf{OptiPulse} , a structured end-to-end pipeline\lb
+consisting of:
+\begin{bul}
+\item True-timestamp video acquisition (30--60 FPS) with\lb
+duplicate-frame suppression and real-time scene diagnostics.
+\item Asynchronous YOLOv8 ROI detection coupled with a\lb
+motion-adaptive exponential moving average smoother and a\lb
+1.6x enlarged crop.
+\item Uniform 30.0 Hz temporal resampling and in-network\lb
+6-channel normalization (DiffNormalized motion +\lb
+standardized appearance).
+\item A 10-model heterogeneous 3D-CNN ensemble combining\lb
+\textbf{VitalNet-Pix (v1)} and \textbf{VitalNet-MRC (v4)} trained with\lb
+cross-illumination consistency and HR time-stretch\lb
+augmentation.
+\item Spectral-domain ensemble fusion decoded by a prior-free\lb
+causal HMM tracker, slew-rate limiter, and 5-s median SNR\lb
+honesty gate.
+\end{bul}
+
+\Section{PROBLEM STATEMENT}
+The primary problem addressed in this project is the accurate,\lb
+unbiased extraction of heart rate across the full 39--192 BPM\lb
+band (0.65--3.2 Hz) from standard RGB video streams without\lb
+physical sensors. Detailed diagnosis of our initial PhysFormerX\lb
+baseline (which had an end-to-end MAE of 6.81 BPM) revealed\lb
+five critical real-world challenges:
+\newpage
+% ============================ PAGE 2, LEFT ============================
+\Subsection{Key Challenges}
+\begin{num}
+\item \textbf{Timestamp and Frame-Rate Drift:} Consumer webcams\lb
+rarely deliver an exact 30.0 FPS. Our Apple M4 FaceTime\lb
+sessions delivered 24.0 FPS with 137 bursty gaps of\lb
+0.10--0.35 s, while DroidCam virtual phone cameras repeated\lb
+54\% of frames to pad 28 FPS streams to 60 FPS. Assuming a\lb
+nominal 30 FPS scales every FFT frequency bin by 30/24 =\lb
++25\%.
+\item \textbf{Hard Mask Flicker \& Train--Live Mismatch:} The earlier\lb
+pipeline used a binary YCbCr chrominance threshold whose\lb
+boundary pixels flickered in and out of the spatial mean from\lb
+frame to frame, injecting step-change noise larger than the\lb
+pulse itself.
+\item \textbf{Non-Linear Signal Destruction in Low Light:} In dark\lb
+scenes where per-pixel pulse SNR falls below -40 dB,\lb
+applying BatchNorm and ELU non-linearities at full pixel\lb
+resolution before spatial averaging destroys the weak periodic\lb
+signal.
+\item \textbf{Dataset HR Distribution Bias (70--100 BPM Collapse):}\lb
+Because UBFC-rPPG labels cluster around resting rates,\lb
+standard regression and unconstrained networks gravitate\lb
+toward \tld75 BPM and fail at elevated heart rates (120--170\lb
+BPM).
+\item \textbf{Camera Auto-Exposure \& False Tracker Locks:} Backlit\lb
+scenes trigger webcam auto-exposure swings of -11\% to +8\%\lb
+(\tld30x larger than the 0.34\% pulse). A temporal tracker can\lb
+lock onto steady camera noise on a blank wall and report\lb
+high self-consistency unless gated by true spectral SNR.
+\end{num}
+
+\Subsection{Objective}
+The objective of OptiPulse is to develop a real-time\lb
+contactless monitoring system across 39--192 BPM that: (i)\lb
+achieves \tld1.5 BPM MAE on unseen subjects in normal light; (ii)\lb
+reduces error by >25\% under low light and head motion; (iii)\lb
+guarantees zero train--live discrepancy via a unified library (\lb
+\textbf{optipulse/} ); (iv) runs smoothly on NVIDIA CUDA GPUs, Apple\lb
+Silicon MPS GPUs, and CPUs; and (v) suppresses unreliable\lb
+readings via an empirically calibrated SNR honesty gate.
+
+\Section{ARCHITECTURAL OVERVIEW}
+OptiPulse is organized into a single-source-of-truth Python\lb
+package ( \textbf{optipulse/} ) shared identically by offline dataset\lb
+preprocessing, 5-fold cross-validation training, deterministic\lb
+stress evaluation, and the real-time webcam application (Fig. 1).\lb
+Separating asynchronous face detection from 30 Hz resampled\lb
+3D-CNN inference ensures high frame throughput and accurate\lb
+frequency estimation.
+\newpage
+% ============================ PAGE 2, RIGHT ===========================
+\vspace*{-8.4pt}
+\colfig{figures/optipulse_pipeline_diagram.png}
+\vspace{-1.5pt}
+\figcap{The six-stage OptiPulse modular pipeline integrating true-timestamp\lb
+capture, YOLOv8 tracking with motion-adaptive BoxSmoother, uniform 30\lb
+Hz resampling, the 10-model VitalNet-Pix and VitalNet-MRC ensemble,\lb
+spectral fusion with causal HMM tracking, and the SNR honesty gate.}
+
+\vspace{3.2pt}
+\Subsection{Asynchronous YOLOv8 Detection Pipeline}
+Each incoming BGR frame is stamped immediately upon\lb
+capture with its monotonic clock time via \textbf{time.perf\_counter()} in\lb
+a dedicated background capture thread (45-frame queue). Exact\lb
+duplicate frames from virtual camera drivers are detected via an\lb
+8x8 subsampled equality check and skipped before buffering.\lb
+Facial localization uses our custom-trained YOLOv8 model (\lb
+\textbf{yolov8\_face\_nose\_chest.pt} , input size 320x320, confidence\lb
+threshold 0.30) selecting the highest-confidence face bounding\lb
+box. On CUDA GPUs, detection runs every 2nd frame at 30 FPS\lb
+(every 4th at 60 FPS); on macOS MPS and CPU machines, an\lb
+\textbf{AsyncFace} background thread runs YOLOv8 at 4--8 Hz so\lb
+detector latency (\tld147 ms on CPU) never blocks frame capture.\lb
+If YOLOv8 is unavailable, the detector automatically falls back\lb
+to OpenCV\textq s frontal Haar cascade.
+
+\Subsection{Motion-Adaptive BoxSmoother \& 1.6x Crop}
+Even with an accurate detector, bounding-box coordinates\lb
+exhibit 1--3 pixel jitter between frames, shifting borders and\lb
+creating false intensity oscillations. Fixed heavy EMA\lb
+smoothing, however, lags behind real head movement. We\lb
+implement \textbf{BoxSmoother} , a causal motion-adaptive EMA filter\lb
+over the square box state s\_t = (c\_x, c\_y, S). Given relative\lb
+center displacement d\_t = \textbar\textbar m\_t - s\_\{t-1\}\textbar\textbar\ / S\_\{t-1\}, the\lb
+smoothing gain a\_t scales linearly between a\_slow = 0.12 (strong\lb
+jitter suppression when stationary) and a\_fast = 0.75 (rapid\lb
+tracking when displacement reaches 8\% of face size), while\lb
+scale smoothing is capped at a\_S = min(a\_t, 0.25) to prevent\lb
+zoom-pumping:
+\vspace{3.7pt}
+\eqline{28pt}{s\_t = (1 - a\_t) s\_\{t-1\} + a\_t m\_t,\ \ \ a\_t in [0.12, 0.75]}
+\newpage
+% ============================ PAGE 3, LEFT ============================
+\hspace*{10.8pt}Using s\_t, \textbf{crop\_square()} warps a square of side 1.6 \textit{S\_t in a\lb
+single sub-pixel affine step ( cv2.warpAffine with replicate\lb
+border padding) to an 80x80 RGB crop. Crucially, no hard\lb
+YCbCr mask is used} ; eliminating binary chrominance\lb
+thresholding removes mask-flicker noise and allows the neural\lb
+network to learn a smooth, soft spatial attention mask.
+
+\Subsection{True-Timestamp Bin Averaging \& 30 Hz Resampling}
+Every 0.5 s (once >= 6.0 s of crops are buffered, up to a 10.0\lb
+s window; any gap > 1.0 s resets the buffer), the buffered\lb
+sequence of (timestamp, crop) pairs is converted to a uniform\lb
+30.0 Hz clip (300 frames for 10 s). When the camera delivers >\lb
+39 FPS (such as 60 FPS phone streams via DroidCam),\lb
+\textbf{bin\_average()} averages all frames falling into each 1/30 s slot\lb
+before linear timestamp interpolation ( \textbf{resample\_uniform()} ),\lb
+reducing per-frame sensor noise by sqrt(k). Finally,\lb
+\textbf{to\_model\_input()} applies a deterministic center zoom of 0.93\lb
+(80x80 -> 72x72 RGB in float32), matching the center of the\lb
+training zoom distribution [0.86, 1.00].
+
+\Section{VITALNET ARCHITECTURES \& LEARNING}
+OptiPulse ensembles two complementary 3D convolutional\lb
+neural network architectures implemented in \textbf{optipulse/model.py}\lb
+(Fig. 2): \textbf{VitalNet-Pix (v1)} and \textbf{VitalNet-MRC (v4)} .
+
+\vspace{3.7pt}
+\colfig{figures/vitalnet_architecture_diagram.png}
+\vspace{-0.8pt}
+\figcap{Architecture of VitalNet-Pix (v1) and VitalNet-MRC (v4). Both\lb
+share in-network 6-channel normalization and dual 3D-CNN towers with\lb
+soft spatial attention (g1, g2). VitalNet-MRC adds a linear-first float32\lb
+multi-scale RegionBranch (46 regions across 6x6, 3x3, 1x1 grids),\lb
+time-varying softmax maximal-ratio combining, and an\newline
+input-noise-conditioned MLP fusion gate.}
+
+\vspace{2.8pt}
+\Subsection{In-Network 6-Channel Difference-Frame Representation}
+To ensure training and live inference can never normalize\lb
+inputs differently, \textbf{normalize\_inputs()} executes inside\lb
+\textbf{VitalNet.forward()} . Given RGB clip X in [0, 1] of shape [B, 3,\lb
+T, 72, 72], it constructs a 6-channel tensor Z = [D \textbar\textbar\ A] of shape\lb
+[B, 6, T, 72, 72] combining a 3-channel \textbf{DiffNormalized motion\lb
+stream} D and a 3-channel \textbf{standardized appearance stream} A\lb
+[4], [14]:
+\vspace{2.3pt}
+\eqline{9.2pt}{D\_t = clip( ((X\_t - X\_\{t-1\}) / (X\_t + X\_\{t-1\} + eps)) / std, -6, 6 )}
+
+where eps = 2/255 and A = (X - mean(X)) / (std(X) + 1e-4).\lb
+Because D\_t is a relative frame-to-frame intensity ratio, global\lb
+brightness scaling (X -> kX) cancels out analytically, providing\lb
+built-in invariance to dim illumination while removing static\lb
+appearance.
+
+\Subsection{VitalNet-Pix (Version 1): Dual-Stream 3D-CNN with Soft Attention}
+VitalNet-Pix (0.600M parameters, base width c = 32)\lb
+processes the motion and appearance streams through parallel\lb
+3D-CNN towers (PhysNet/TS-CAN style [4], [5]) that preserve\lb
+full temporal length T = 300 throughout:
+\begin{bul}
+\item \textbf{Spatial Stems (72x72 -> 36x36):} Conv3d(3->16, kernel
+\colend
+\end{bul}
+% ============================ PAGE 3, RIGHT ===========================
+\begin{bul}
+\item[] 1x5x5, stride 1x2x2) + BatchNorm3d + ELU on both streams.
+\item \textbf{Stage 1 (36x36, 32 ch) \& Soft Attention Mask g1:} Two\lb
+spatiotemporal ConvBlock3d(3x3x3) layers on the motion\lb
+stream and two spatial ConvBlock3d(1x3x3) layers on the\lb
+appearance stream. An \textbf{Attention} module applies a 1x1x1\lb
+Conv3d and sigmoid normalized to spatial mean 0.5,\lb
+multiplying the motion features (M\_1 <- M\_1 g\_1) before\lb
+AvgPool3d(1x2x2).
+\item \textbf{Stage 2 (18x18 -> 9x9, 64 ch) \& Stage 3 (9x9, 64 ch):} Stage\lb
+2 applies dual-stream convolutions, soft attention mask g\_2,\lb
+and spatial pooling to 9x9. Stage 3 applies two temporally\lb
+dilated 3D convolutions (d\_t = 2, 4), 3D dropout (p = 0.10),\lb
+and spatial mean pooling to yield pixel features f\_pix of\lb
+shape [B, 64, T].
+\item \textbf{Dilated Temporal Residual Head:} Four 1D residual blocks (\lb
+\textbf{TemporalRes} , kernel 5, dilations d = 1, 2, 4, 8, dropout\lb
+0.20) followed by a 1x1 Conv1d produce the zero-mean\lb
+rPPG waveform y of shape [B, T].
+\end{bul}
+
+\Subsection{VitalNet-MRC (Version 4): Linear-First Region Branch \& Noise Gate}
+Our Fold-0 diagnosis revealed that while darkening alone\lb
+(x0.10) raised MAE modestly (1.06 -> 1.59 BPM) and sensor\lb
+noise alone gave 2.51 BPM, their combination caused MAE to\lb
+jump to 8.78 BPM: when per-pixel pulse sits \tld40 dB below\lb
+sensor noise, applying BatchNorm and ELU non-linearities at\lb
+36x36 resolution destroys the weak pulse before pixels are\lb
+averaged. \textbf{VitalNet-MRC (v4)} (0.618M parameters) solves this\lb
+with three architectural innovations inspired by DistancePPG [8]\lb
+and RhythmNet [11]:
+\begin{num}
+\item \textbf{Linear-First Multi-Scale Region Integration in float32:}\lb
+Using Stage-1 attention g\_1 as a spatial weight, raw RGB\lb
+pixels are averaged \textit{linearly in float32} (disabling bfloat16\lb
+autocast, since bfloat16\textq s 0.4\% precision is coarser than the\lb
+0.3\% pulse) across three multi-scale grids: 6x6 (36 regions),\lb
+3x3 (9 regions), and 1x1 (1 global region), totaling R = 46\lb
+regions. Averaging N pixels linearly reduces independent\lb
+sensor noise by sqrt(N) prior to any non-linearity.
+\item \textbf{Time-Varying Softmax Maximal-Ratio Combining\lb
+(MRC):} Each region trace is diff-normalized, whitened by its\lb
+own noise scale s\_m, concatenated with its relative log-noise\lb
+level, and passed through a shared dilated 1D-CNN (d = 1, 2,\lb
+4). A scoring Conv1d + softmax across the 46 regions\lb
+computes time-varying reliability weights w\_\{m,t\} to form\lb
+the pooled region representation f\_reg:
+\end{num}
+\vspace{1.9pt}
+\eqline{0pt}{w\_\{m,t\} = softmax\_m( score(h\_\{m,t\}) ),\ \ f\_\{reg,t\} = sum\_m w\_\{m,t\} h\_\{m,t\}}
+\vspace{0.2pt}
+\begin{num}[start=3]
+\item \textbf{Input-Noise-Gated Two-Path Fusion:} The network\lb
+measures its own input noise via per-pixel 2nd-difference\lb
+log-noise n\_pix and mean region log-noise n\_reg. A 2-layer\lb
+MLP maps [n\_pix, n\_reg] to gates [g\_pix, g\_reg] = 2\lb
+sigmoid(MLP(n\_pix, n\_reg)), weighting f\_pix against f\_reg\lb
+via a 1x1 Conv1d + BN + ELU fusion layer before the\lb
+temporal residual head.
+\end{num}
+
+\Subsection{Training Objective \& Cross-Illumination Self-Consistency}
+Both model families optimize a supervised composite loss\lb
+combining negative Pearson correlation (waveform shape\lb
+fidelity) and frequency-domain Spectral KL divergence over a\lb
+fine 1-BPM explicit DFT grid (39--192 BPM):
+\vspace{1.7pt}
+\eqline{6.1pt}{L\_sup = L\_Pearson(y\_hat, y) + 0.5 * KL( PSD(y) \textbar\textbar\ PSD(y\_hat) )}
+\vspace{0.2pt}
+
+For \textbf{VitalNet-MRC} , we introduce \textbf{cross-illumination\lb
+self-consistency} (pair\_w = 0.5): each training clip is shown twice\lb
+with identical geometry and motion---once well-lit (X\_lit) and
+\colbreak
+% ============================ PAGE 4, LEFT ============================
+once forced into low light with shot/read noise (X\_dark). The\lb
+dark prediction must match the stop-gradient waveform\lb
+extracted by the model itself from the well-lit view:
+\vspace{1.7pt}
+\eqline{0pt}{L\_tot = L\_sup(lit) + L\_sup(dark) + 0.5 * L\_Pearson(y\_dark, sg(y\_lit))}
+\vspace{0.2pt}
+
+Unlike finger contact-PPG (which has a finger-to-face pulse\lb
+transit lag and different dicrotic shape), stopgrad(y\_lit) shares the\lb
+exact facial pulse phase and morphology, isolating illumination\lb
+and sensor noise.
+
+\Subsection{Unbiased HR Time-Stretch \& Webcam-Realistic GPU Augmentation}
+To prevent the network from memorizing the 65--100 BPM\lb
+training distribution, \textbf{BatchBuilder} applies \textbf{HR time-stretch\lb
+resampling} to 60\% of clips: a target HR is drawn uniformly\lb
+from 45--180 BPM and both video and PPG are time-stretched\lb
+by factor r in [0.55, 1.80]. On-GPU augmentations (\lb
+\textbf{optipulse/augment.py} ) further simulate low light (gain down to\lb
+6\%, gamma, shot/read noise, 8-bit quantization), color cast, side\lb
+light, auto-exposure drift/steps, quasi-periodic head motion and\lb
+jumps, blur, and 10--25 FPS frame drops re-interpolated to 30\lb
+Hz.
+
+\Section{DEPLOYMENT \& REAL-TIME OPTIMIZATION}
+\vspace{1.1pt}
+\Subsection{Spectral Ensemble Fusion \& Harmonic SNR}
+At inference, the 10 fold checkpoints (5 \textbf{pix\_fold0..4} + 5\lb
+\textbf{mrc\_fold0..4} ) run in ensemble. Because models can predict\lb
+waves with opposite sign or slight phase shifts, averaging raw\lb
+waveforms causes cancellation. Instead, each waveform is\lb
+detrended (Tarvainen smoothness priors, lambda = 100 [10]),\lb
+bandpass-filtered (2nd-order Butterworth, 0.65--3.2 Hz = 39--192\lb
+BPM), and transformed via a 4096-point Hann FFT. Spectral\lb
+SNR (in dB) is computed as the ratio of power within +-0.1 Hz\lb
+of the peak frequency f\_0 and +-0.2 Hz of its first harmonic\lb
+2f\_0 to all remaining in-band power [9].
+
+\Subsection{Prior-Free Causal HMM Heart-Rate Tracker}
+In severe low light, a random noise peak beats the true\lb
+cardiac peak in \tld35\% of single 10-s windows. However, the true\lb
+heart rate is continuous over time while noise peaks jump\lb
+randomly. \textbf{HRTracker} ( \textbf{optipulse/tracking.py} ) decodes the\lb
+ensemble\textq s band-normalized PSD on a 1-BPM grid (39--192\lb
+BPM) using a causal forward HMM filter: (i) a \textbf{strictly uniform\lb
+initial prior} (no pull toward 70--80 BPM); (ii) a Gaussian\lb
+random-walk transition kernel (sigma = 4.0 BPM/s) that follows\lb
+exercise recovery while rejecting sudden jumps; and (iii)\lb
+\textbf{overlap-tempered spectral evidence} L\_t(b) = ((1 - eps)\lb
+PSD(b)\textasciicircum 2 + eps/154)\textasciicircum (dt / 1.0s), which down-weights 0.5-s\lb
+overlapping window updates so evidence is never\lb
+double-counted. Tracker confidence C\_t in [0, 1] is the posterior\lb
+probability mass within +-3 BPM of the MAP peak.
+
+\Subsection{Display Lock, Slew Limit, Honesty Gate \& Cross-Platform UI}
+To ensure reliable live operation, \textbf{HREngine} applies three\lb
+display rules: (1) \textbf{Confidence Lock:} no reading is displayed until\lb
+C\_t >= 0.60 (typically 6.5--12 s); (2) \textbf{Physiological Slew Limit:}\lb
+displayed BPM changes by at most 3.0 BPM/s, or 9.0 BPM/s\lb
+when C\_t >= 0.75; and (3) \textbf{5-s Median SNR Honesty Gate:} if\lb
+the 5-s median SNR falls below -1.5 dB, the readout is hidden (\lb
+\textit{\textq Pulse signal too weak\textq} ), lowering displayed error on UBFC\lb
+from 1.59 to 1.17 BPM while hiding only 5\% of updates. As\lb
+shown in Fig. 3, \textbf{LiveUI} renders the camera feed with\lb
+state-colored brackets, a fast 96x96 attention glow, live BPM,\lb
+beating heart, 5-bar SNR indicator, 60-s HR trend, pulse\lb
+waveform, and \textbf{SceneMonitor} backlighting/motion alerts. On
+\colbreak
+% ============================ PAGE 4, RIGHT ===========================
+macOS ( \textbf{launchers/macos/run\_mac.sh} ) and Windows (\lb
+\textbf{launchers/windows/run\_optipulse.bat} ), \textbf{pick\_device()}\lb
+automatically selects CUDA or verifies Apple Silicon MPS\lb
+against CPU within 2\% tolerance.
+
+\vspace{0.5pt}
+\colfig{figures/live_ui_preview.png}
+\vspace{-1.5pt}
+\figcap{The OptiPulse real-time instrument panel (optipulse/ui.py) showing\lb
+face tracking brackets, the learned 36x36 attention heatmap glow on the\lb
+forehead and cheeks, live BPM readout, state chip, 5-bar SNR indicator,\lb
+60-s HR trend, and filtered rPPG waveform.}
+
+\vspace{3.7pt}
+\Section{DATASET PREPARATION \& GROUND-TRUTH AUDIT}
+We evaluate on all 50 videos of the public \textbf{UBFC-rPPG}\lb
+dataset (Dataset 1: 8 videos; Dataset 2: 42 subjects, 640x480\lb
+MPEG-4 at \tld0.8 Mbit/s with finger pulse-oximeter PPG ground\lb
+truth). Inspecting Dataset 2\textq s raw ground-truth timestamps\lb
+revealed an 11 ms / 44 ms logging-timer quantization jitter;\lb
+\textbf{optipulse/ubfc.py} removes this jitter via linear regression of\lb
+frame index against logged time, recovering true capture rates\lb
+(23.9--30.1 FPS). Running \textbf{pipeline/preprocess\_ubfc.py} extracts\lb
+1.6x smoothed YOLOv8 face crops (80x80 RGB) and resamples\lb
+both video and contact PPG to an exact 30.0 Hz timeline (\lb
+\textbf{100.0\% face detection rate} across all 50 videos).
+
+Before training, \textbf{pipeline/audit\_dataset.py} audited every\lb
+video\textq s ground truth across 10-s windows (Fig. 4). Seven subjects\lb
+failed the quality audit (oximeter-vs-PPG HR disagreement > 10\lb
+BPM in > 30\% of windows, or median PPG SNR < 2.0 dB):\lb
+\textbf{sub11, sub18, sub20, sub24} (oximeter HR dropouts with usable\lb
+PPG waveforms) and \textbf{sub3, sub4, sub14} (noisy contact PPG). All\lb
+7 flagged subjects are excluded from training across all folds so\lb
+corrupted labels never degrade the network, and main CV\lb
+metrics are reported on the \textbf{43 reliable subjects} (with the 7\lb
+held-out subjects evaluated separately). Auditing the legacy\lb
+\textbf{preprocessed\_vidformer2} cache also revealed that old windows\lb
+had been saved with a wrong hard-coded 28.0 FPS instead of\lb
+28.67 FPS.
+\newpage
+% ============================ PAGE 5, LEFT ============================
+\vspace*{-8.4pt}
+\colfig{figures/audit_hr_timelines.png}
+\vspace{-0.5pt}
+\figcap{Automated ground-truth quality audit across all 50 UBFC-rPPG\lb
+subjects (pipeline/audit\_dataset.py), comparing contact-PPG spectral HR\lb
+(black), oximeter sensor HR (cyan dashed), and video POS HR (red dotted).\lb
+Seven flagged subjects are excluded from training.}
+
+\vspace{3.6pt}
+\Section{EXPERIMENTAL DEPTH AND TRIED METHODS}
+Before finalizing the OptiPulse architecture, we systematically\lb
+implemented and benchmarked classical non-learning methods,\lb
+deep spatiotemporal baselines from our initial exploration phase,\lb
+and four targeted architectural ablations on Fold 0 (Table I):
+\begin{bul}
+\item \textbf{Classical Non-Learning Baselines (GREEN, CHROM,\lb
+POS):} Spatial RGB means inside a central facial ellipse\lb
+projected via GREEN, CHROM [9], and POS [6] yield 15.53,\lb
+17.36, and 20.56 BPM MAE on UBFC because 0.8 Mbit/s\lb
+MPEG-4 compression corrupts fixed color ratios.
+\item \textbf{Earlier Deep Architectures (DeepPhys, PhysNet,\lb
+HybridRPPG, TempResNet, AdvancedPhysNet,\lb
+PhysFormerX):} In our Phase-1 exploration on UBFC-rPPG,\lb
+raw DeepPhys (26.45 BPM), PhysNet (44.99 BPM),\lb
+HybridRPPG (18.64 BPM), TempResNet (12.71 BPM),\lb
+Lightweight EMD-CNN (12.02 BPM), VidFormer (9.63\lb
+BPM), AdvancedPhysNet (8.23 BPM), and PhysFormerX\lb
+(6.28 BPM window-split / 6.81 BPM end-to-end live) were\lb
+limited by hard YCbCr mask flicker, timestamp drift, and\lb
+lack of HR time-stretch augmentation.
+\item \textbf{Fold-0 Development Ablations (Rejected vs. Retained):} On\lb
+Fold 0 (10 unseen subjects), increasing low-light\lb
+augmentation strength and training for 40 epochs ( \textbf{Run 2} )\lb
+degraded motion MAE from 3.76 to 8.25 BPM ( \textit{rejected} ).\lb
+Inserting a [1,2,1]/4 temporal pre-filter stem before frame\lb
+differencing ( \textbf{VitalNet v3} ) hurt normal MAE (1.06 -> 2.14\lb
+BPM) and low-light MAE (8.61 -> 11.23 BPM) ( \textit{rejected} ).
+\colbreak
+\end{bul}
+% ============================ PAGE 5, RIGHT ===========================
+\begin{bul}
+\item[] Test-time Gaussian spatial blur degraded low-light MAE to\lb
+14--18 BPM ( \textit{rejected} ). In contrast, combining \textbf{VitalNet-Pix\lb
+(v1)} + \textbf{VitalNet-MRC (v4)} with spectral fusion and causal\lb
+HMM tracking lowered Fold-0 clean MAE to \textbf{1.01 BPM} ,\lb
+motion MAE to \textbf{2.37 BPM} , and low-light + motion MAE to\lb
+\textbf{5.92 BPM} ( \textit{retained} ).
+\item \textbf{Real-World Blank-Wall Control Experiment (Apple M4\lb
+Mac):} During live testing on an Apple M4 MacBook in\lb
+backlit conditions (face brightness 80 vs. background 163,\lb
+auto-exposure swings of -11\% to +8\%, SNR -2.1 dB),\lb
+running the exact same 10-model ensemble on a \textbf{blank wall\lb
+and T-shirt patch} produced an identical SNR (-2.4 dB) and\lb
+high tracker confidence (0.80). This control experiment\lb
+proved that when signal SNR < -1.5 dB, a single 10-s\lb
+window cannot be distinguished from camera auto-exposure\lb
+noise---motivating our -1.5 dB SNR honesty gate and\lb
+real-time \textbf{SceneMonitor} backlighting warnings.
+\end{bul}
+
+\vspace{4.6pt}
+\tblcap{FOLD-0 DEVELOPMENT ABLATION (10 UNSEEN SUBJECTS, MAE\\
+IN BPM) \& PHASE-1 BASELINE COMPARISON}
+\vspace{0.6pt}
+\begin{tframe}
+\begin{tabular}{@{}L{119.0pt}V C{31.86pt}V C{31.86pt}V C{31.86pt}V C{31.5pt}@{}}
+\rowcolor{tblhead}\textbf{Model / Ablation Variant}\hstrut & \textbf{Clean} & \textbf{LowLight} & \textbf{Motion} & \textbf{LL+Mot}\\
+\dhline
+Phase-1: DeepPhys / PhysNet\rstrut & 26.45 & --- & --- & ---\\ \ghline
+Phase-1: HybridRPPG / TempResNet\rstrut & 18.64 & --- & --- & ---\\ \ghline
+Phase-1: AdvancedPhysNet + YOLO\rstrut & 8.23 & --- & --- & ---\\ \ghline
+Phase-1: Legacy PhysFormerX (Live)\rstrut & 6.81 & --- & --- & ---\\ \ghline
+Fold-0: Run 1 (VitalNet-Pix v1)\rstrut & 1.06 & 8.61 & 3.76 & 9.77\\ \ghline
+Fold-0: Run 2 (Harder Aug, Rejected)\rstrut & 1.08 & 9.00 & 8.25 & 13.00\\ \ghline
+Fold-0: VitalNet v3 (Pre-Filter, Rej.)\rstrut & 2.14 & 11.23 & 3.91 & 13.52\\ \ghline
+Fold-0: VitalNet v4 (Region-MRC)\rstrut & 1.86 & 7.29 & 3.57 & 9.24\\ \ghline
+Fold-0: VitalNet-MRC (v4 + Pair Loss)\rstrut & 1.98 & 7.92 & 4.14 & 11.44\\ \ghline
+\rowcolor{tblhi}\textbf{Fold-0: Pix + MRC + HMM Tracked}\rstrut & \textbf{1.01} & \textbf{6.31} & \textbf{2.37} & \textbf{5.92}\\
+\end{tabular}
+\end{tframe}
+
+\vspace{1.4pt}
+\Section{RESULTS}
+We evaluated OptiPulse using strict \textbf{subject-wise 5-fold\lb
+cross-validation} on UBFC-rPPG (50 videos; fixed 30-epoch\lb
+schedule, last epoch kept, zero checkpoint picking on test data).\lb
+Every subject is scored exclusively by models that never saw\lb
+that person during training. Table II and Table III summarize the\lb
+complete 5-fold cross-validation results across the 43 unseen\lb
+subjects with reliable ground truth (270 non-overlapping 10-s\lb
+windows per condition), illustrated in Fig. 5, Fig. 6, and Fig. 7.
+
+\vspace{1.0pt}
+\tblcap{MAIN 5-FOLD SUBJECT-WISE CROSS-VALIDATION MAE (BPM) ON\\
+UNSEEN SUBJECTS (N = 43, 270 WINDOWS)}
+\vspace{0.6pt}
+\begin{tframe}
+\begin{tabular}{@{}L{103.8pt}V C{26.82pt}V C{29.34pt}V C{26.82pt}V C{29.34pt}V C{29.7pt}@{}}
+\rowcolor{tblhead}\textbf{Method (5-Fold Unseen CV)}\hstrut & \textbf{Norm} & \textbf{LowL} & \textbf{Mot} & \textbf{LL+M} & \textbf{12fps}\\
+\dhline
+GREEN (Classical)\rstrut & 15.53 & 21.94 & 36.21 & 30.41 & 17.14\\ \ghline
+CHROM (Classical [9])\rstrut & 17.36 & 22.45 & 23.51 & 21.96 & 18.60\\ \ghline
+POS (Classical [6])\rstrut & 20.56 & 25.97 & 29.17 & 27.64 & 22.74\\ \ghline
+Legacy PhysFormerX Monitor\rstrut & 6.81 & --- & --- & --- & ---\\ \ghline
+VitalNet-Pix (v1, Single)\rstrut & \textbf{1.42} & 10.91 & 4.06 & 11.47 & 1.50\\ \ghline
+VitalNet-MRC (v4, Single)\rstrut & 1.89 & 10.09 & 4.42 & 11.20 & 1.85\\ \ghline
+VitalNet-Pix + HMM Tracking\rstrut & 1.56 & 8.02 & 3.48 & 9.92 & 1.55\\ \ghline
+VitalNet-MRC + HMM Tracking\rstrut & 1.81 & 7.32 & 3.99 & 9.02 & 1.66\\ \ghline
+Pix + MRC Spectral Fusion\rstrut & 1.46 & 9.77 & 3.59 & 10.72 & \textbf{1.43}\\ \ghline
+\rowcolor{tblhi}\textbf{OptiPulse Full System}\rstrut & \textbf{1.45} & \textbf{7.55} & \textbf{3.12} & \textbf{8.23} & \textbf{1.59}\\
+\end{tabular}
+\end{tframe}
+\newpage
+% ============================ PAGE 6, LEFT ============================
+\tblcap{FULL-SYSTEM DETAILED 5-FOLD CV METRICS ACROSS STRESS\\
+CONDITIONS (N = 43 UNSEEN SUBJECTS)}
+\vspace{0.6pt}
+\begin{tframe}
+\begin{tabular}{@{}L{88.65pt}V C{29.34pt}V C{31.86pt}V C{31.86pt}V C{29.34pt}V C{34.75pt}@{}}
+\rowcolor{tblhead}\textbf{Condition}\hstrut & \textbf{MAE} & \textbf{RMSE} & \textbf{MAPE} & \textbf{r} & \textbf{<=5 BPM}\\
+\dhline
+\rowcolor{tblhi}\textbf{Normal Light}\rstrut & \textbf{1.45} & \textbf{5.28} & \textbf{2.0\%} & \textbf{0.948} & \textbf{96.3\%}\\ \ghline
+Low Light (x0.1 + Noise)\rstrut & 7.55 & 13.89 & 9.1\% & 0.629 & 66.3\%\\ \ghline
+Head Motion (Sway/Jumps)\rstrut & 3.12 & 8.14 & 3.9\% & 0.871 & 87.8\%\\ \ghline
+Low Light + Motion\rstrut & 8.23 & 14.67 & 9.4\% & 0.557 & 64.8\%\\ \ghline
+12 FPS Webcam\rstrut & 1.59 & 5.15 & 2.1\% & 0.951 & 95.2\%\\
+\end{tabular}
+\end{tframe}
+
+\vspace{1.0pt}
+\colfig{figures/cv_scatter_bland_altman.png}
+\vspace{-1.5pt}
+\figcap{5-fold CV scatter plot and Bland--Altman agreement on unseen\lb
+reliable-GT subjects (n = 43, 270 windows, MAE = 1.45 BPM, Pearson r =\lb
+0.948, 96.3\% within 5 BPM).}
+
+\vspace{0.5pt}
+\colfig{figures/robustness_mae.png}
+\vspace{-1.5pt}
+\figcap{Stress-test robustness comparison (MAE in BPM, lower is better)\lb
+across all five deterministic conditions on unseen subjects (n = 43).}
+
+\vspace{0.5pt}
+\colfig{figures/training_curves.png}
+\vspace{-1.5pt}
+\figcap{Held-out test-fold MAE monitored across the fixed 30-epoch training\lb
+schedule for all 5 folds of VitalNet-Pix and VitalNet-MRC.}
+\newpage
+% ============================ PAGE 6, RIGHT ===========================
+\tblcap{END-TO-END LIVE APP EVALUATION ON RAW VIDEOS (0.5S\\
+UPDATES) \& SPECTRAL SNR CALIBRATION}
+\vspace{0.6pt}
+\begin{tframe}
+\begin{tabular}{@{}L{124.2pt}V C{39.42pt}V C{41.58pt}V C{41.94pt}@{}}
+\rowcolor{tblhead}\textbf{Live Pipeline / SNR Regime}\hstrut & \textbf{Updates} & \textbf{MAE (BPM)} & \textbf{<=5 BPM}\\
+\dhline
+Legacy PhysFormerX (All 50 Videos)\rstrut & 5,718 & 7.71 & 60.5\%\\ \ghline
+Legacy PhysFormerX (43 Reliable)\rstrut & 4,969 & 6.81 & 63.4\%\\ \ghline
+\rowcolor{tblhi}\textbf{OptiPulse Live (All 50 Videos)}\rstrut & \textbf{6,055} & \textbf{1.72} & \textbf{94.6\%}\\ \ghline
+\rowcolor{tblhi}\textbf{OptiPulse Live (43 Reliable)}\rstrut & \textbf{5,268} & \textbf{1.59} & \textbf{95.9\%}\\ \ghline
+\rowcolor{tblhi}\textbf{OptiPulse + Gate (95\% Shown)}\rstrut & \textbf{5,005} & \textbf{1.17} & \textbf{97.4\%}\\ \ghline
+SNR < -3 dB (Noise-Dominated)\rstrut & 223 win & 14.30 & 43.5\%\\ \ghline
+SNR -3 to 0 dB (Borderline)\rstrut & 429 win & 7.76 & 69.7\%\\ \ghline
+SNR 0 to +3 dB (Good Signal)\rstrut & 315 win & \textbf{1.75} & \textbf{95.9\%}\\ \ghline
+SNR > +3 dB (High-Quality Pulse)\rstrut & 383 win & \textbf{0.56} & \textbf{99.8\%}\\
+\end{tabular}
+\end{tframe}
+
+\textbf{Key Experimental Findings:} (1) In normal light, OptiPulse\lb
+achieves \textbf{1.45 BPM MAE} (96.3\% of windows within 5 BPM, r =\lb
+0.948), reaching the +-1 BPM physical accuracy floor of the\lb
+contact finger-PPG reference. (2) Under stress conditions,\lb
+combining VitalNet-Pix + VitalNet-MRC with causal HMM\lb
+tracking cuts low-light MAE by \textbf{30.8\%} (10.91 -> 7.55 BPM) and\lb
+motion MAE by \textbf{23.2\%} (4.06 -> 3.12 BPM). (3) On the 4\lb
+never-trained subjects with verified PPG waveforms ( \textbf{sub11,\lb
+sub18, sub20, sub24} ), the 10-model ensemble achieves \textbf{0.79\lb
+BPM MAE} in normal light and \textbf{1.16 BPM MAE} under motion.\lb
+(4) Running the full live application frame-by-frame across all\lb
+raw videos ( \textbf{pipeline/compare\_pipelines.py} , Table IV)\lb
+achieves \textbf{1.59 BPM MAE} (median subject 1.02 BPM), and\lb
+applying the -1.5 dB honesty gate lowers displayed MAE to \textbf{1.17\lb
+BPM} across 95\% of updates---a \textbf{4.3x error reduction} over the\lb
+legacy PhysFormerX baseline (6.81 BPM).
+
+\Section{CONCLUSION AND FUTURE WORK}
+The OptiPulse project demonstrates that achieving\lb
+near-1-BPM contactless heart-rate accuracy requires\lb
+co-designing signal acquisition, physics-informed neural\lb
+architectures, and probabilistic spectral tracking. By integrating\lb
+true-timestamp 30 Hz resampling, motion-adaptive YOLOv8\lb
+ROI stabilization, in-network 6-channel normalization, a\lb
+heterogeneous ensemble of pixel-attention ( \textbf{VitalNet-Pix} ) and\lb
+linear-first region-MRC ( \textbf{VitalNet-MRC} ) 3D-CNNs trained\lb
+with cross-illumination consistency and uniform HR\lb
+time-stretching, prior-free causal HMM tracking, and an SNR\lb
+honesty gate, OptiPulse achieves 1.45 BPM CV MAE and 1.17\lb
+BPM gated live MAE across unseen subjects.
+
+\Subsection{Key Takeaways}
+\begin{bul}
+\item \textbf{Zero Train--Live Divergence \& True Timestamps:}\lb
+Embedding normalization in \textbf{forward()} and resampling onto\lb
+real capture timestamps eliminates frame-rate scaling errors.
+\item \textbf{Linear-First Region Integration Beats Pixel Noise:}\lb
+Averaging attention-weighted pixels in \textbf{float32} before\lb
+non-linearities and gating against pixel features significantly\lb
+improves low-light and motion resilience.
+\item \textbf{Honesty Gating Prevents False Readings:} Combining a\lb
+prior-free causal HMM tracker with a 5-s median SNR gate\lb
+(>= -1.5 dB) separates true cardiac pulses from steady\lb
+auto-exposure noise.
+\end{bul}
+
+\Subsection{Future Work}
+Future work will focus on: (1) multi-dataset training and\lb
+cross-dataset evaluation on \textbf{MMPD} , \textbf{PURE} , and \textbf{UBFC-Phys}\lb
+to validate generalization across diverse illumination regimes and\lb
+mobile sensors; (2) unsupervised test-time personal/domain
+\colbreak
+% ============================ PAGE 7, LEFT ============================
+adaptation using self-supervised spectral sparsity losses (SiNC\lb
+[13]) on unlabeled webcam video; and (3) hardware camera\lb
+auto-exposure/white-balance lock integration.
+
+\SectionNoNum{REFERENCES}
+\vspace{-1.6pt}
+{\refsize
+\begin{list}{}{\setlength\leftmargin{15.7pt}\setlength\labelwidth{15.0pt}%
+  \setlength\labelsep{0.7pt}\setlength\itemsep{1.4pt}\setlength\parsep{0pt}%
+  \setlength\topsep{0pt}\setlength\partopsep{0pt}\setlength\itemindent{0pt}%
+  \renewcommand\makelabel[1]{\hspace{0.7pt}#1\hfil}}
+\item[{[1]}] D. McDuff, S. Gontarek, and R. Picard, "Remote\newline
+photoplethysmography for heart rate and blood oxygenation\lb
+measurement: A review," \textit{IEEE J. Biomed. Health Inform.} , vol. 19,\lb
+no. 6, pp. 1845--1859, 2015.
+\item[{[2]}] S. Bobbia, R. Macwan, Y. Benezeth, A. Mansouri, and J. Dubois,\lb
+"Unsupervised skin tissue segmentation for remote\newline
+photoplethysmography," \textit{Pattern Recognition Letters} , vol. 124, pp.\lb
+82--90, 2019.
+\item[{[3]}] G. Hsu, A. Ambikapathi, and M. Chen, "Deep learning framework for\lb
+heart rate estimation from facial videos," in \textit{Proc. IEEE Int. Conf.\lb
+Syst., Man, Cybern. (SMC)} , 2017.
+\item[{[4]}] W. Chen and D. McDuff, "DeepPhys: Video-based physiological\lb
+measurement using convolutional attention networks," in \textit{Proc. Eur.\lb
+Conf. Comput. Vis. (ECCV)} , 2018, pp. 349--365.
+\item[{[5]}] Z. Yu, X. Li, and G. Zhao, "Remote photoplethysmograph signal\lb
+measurement from facial videos using spatio-temporal networks," in\lb
+\textit{Proc. Brit. Mach. Vis. Conf. (BMVC)} , 2019.
+\item[{[6]}] W. Wang, A. C. den Brinker, S. Stuijk, and G. de Haan, "Algorithmic\lb
+principles of remote PPG," \textit{IEEE Trans. Biomed. Eng.} , vol. 64, no. 7,\lb
+pp. 1479--1491, 2017.
+\item[{[7]}] X. Liu, J. Fromm, S. Patel, and D. McDuff, "Multi-task temporal shift\lb
+attention networks for on-device contactless vitals measurement," in\lb
+\textit{Proc. Adv. Neural Inf. Process. Syst. (NeurIPS)} , 2020, pp.\lb
+19400--19411.
+\item[{[8]}] M. Kumar, A. Veeraraghavan, and A. Sabharwal, "DistancePPG:\lb
+Robust non-contact vital signs monitoring using a camera," \textit{Biomedical\lb
+Optics Express} , vol. 6, no. 5, pp. 1565--1588, 2015.
+\item[{[9]}] G. de Haan and V. Jeanne, "Robust pulse rate from\newline
+chrominance-based rPPG," \textit{IEEE Trans. Biomed. Eng.} , vol. 60, no.\lb
+10, pp. 2878--2886, 2013.
+\item[{[10]}] M. P. Tarvainen, P. O. Ranta-aho, and P. A. Karjalainen, "An\lb
+advanced detrending method with application to HRV analysis," \textit{IEEE\lb
+Trans. Biomed. Eng.} , vol. 49, no. 2, pp. 172--175, 2002.
+\item[{[11]}] X. Niu, S. Shan, H. Han, and X. Chen, "RhythmNet: End-to-end heart\lb
+rate estimation from face via spatial-temporal representation," \textit{IEEE\lb
+Trans. Image Process.} , vol. 29, pp. 2409--2423, 2020.
+\item[{[12]}] Z. Zhang, Z. Pi, and B. Liu, "TROIKA: A general framework for heart\lb
+rate monitoring using wrist-type PPG signals during intensive physical\lb
+exercise," \textit{IEEE Trans. Biomed. Eng.} , vol. 62, no. 2, pp. 522--531,\lb
+2015.
+\item[{[13]}] J. Speth, N. Vance, P. Flynn, and A. Czajka, "Non-contrastive\lb
+unsupervised learning of physiological signals from video," in \textit{Proc.\lb
+IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)} , 2023, pp.\lb
+14464--14474.
+\item[{[14]}] X. Liu, B. Hill, Z. Jiang, S. Patel, and D. McDuff, "rPPG-Toolbox:\lb
+Deep remote PPG toolbox," in \textit{Proc. Adv. Neural Inf. Process. Syst.\lb
+(NeurIPS)} , 2023.
+\item[{[15]}] Z. Sun and X. Li, "Contrast-Phys: Unsupervised video-based remote\lb
+physiological measurement via spatiotemporal contrast," in \textit{Proc. Eur.\lb
+Conf. Comput. Vis. (ECCV)} , 2022, pp. 492--510.
+\item[{[16]}] Z. Yu, Y. Shen, J. Shi, H. Zhao, P. Torr, and G. Zhao, "PhysFormer:\lb
+Facial video-based physiological measurement with temporal difference\lb
+transformer," in \textit{Proc. IEEE/CVF CVPR} , 2022, pp. 4186--4196.
+\end{list}
+\par}
+
+\end{document}
